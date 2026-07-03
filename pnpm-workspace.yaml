@@ -1,0 +1,8 @@
+# Makes cascade its own pnpm workspace root so installs resolve here (and don't
+# walk up to an unrelated parent workspace). No sub-packages — this is a single app.
+packages:
+  - "."
+# esbuild ships a prebuilt platform binary via its install script — allow it.
+allowBuilds:
+  esbuild: true
+  puppeteer: false

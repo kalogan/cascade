@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Cascade</title>
+    <style>
+      html, body, #root { margin: 0; height: 100%; overscroll-behavior: none; }
+      /* The game owns all taps/drags (tile select, swap-drag); without touch-action:none
+         a phone browser treats a swap-drag as a page pan/pinch instead of feeding the
+         canvas pointer handlers. */
+      html, body, #root { touch-action: none; -webkit-user-select: none; user-select: none; }
+      #root { width: 100vw; height: 100vh; height: 100dvh; } /* dvh: mobile URL-bar collapse */
+      body { background: #0b0d16; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
