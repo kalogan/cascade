@@ -41,6 +41,9 @@ export function App() {
     if (!canvas) return;
     const engine = createEngine(canvas, { onState: setS });
     engineRef.current = engine;
+    // Debug/smoke seam: expose the engine so the headless runtime smoke can drive
+    // deterministic hinted swaps and level jumps. Harmless in prod (unused).
+    (window as unknown as { __cascade?: Engine }).__cascade = engine;
     engine.start();
 
     const ro = new ResizeObserver(() => engine.relayout());

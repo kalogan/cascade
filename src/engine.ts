@@ -629,6 +629,15 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     retry() {
       startLevel(run.levelIndex);
     },
+    /** Play one hinted (guaranteed-legal) swap — a test/smoke seam to trigger a real cascade. */
+    hintSwap(): boolean {
+      if (!board || busy || run.phase !== "playing") return false;
+      const h = board.findHint();
+      if (!h) return false;
+      selected = null;
+      trySwap(h[0], h[1]);
+      return true;
+    },
     getState: () => run,
     _debug: { get busy() { return busy; }, get board() { return board; } },
   };
