@@ -31,6 +31,8 @@ import { THEMES, resolveTheme, type ThemeDef } from "game-kit/theme";
 import { createTuning, mountTuningPanel, MATCH3_TUNING, type Tuning } from "game-kit/tuning";
 import { createRng } from "game-kit/prng";
 import { createAudioManager, type AudioManager } from "game-kit/audio";
+import { createGridInput } from "game-kit/grid-input";
+import { createMetaStore, initMeta, type MetaState } from "game-kit/meta";
 
 export interface PublicState {
   screen: "menu" | "playing";
@@ -48,6 +50,8 @@ export interface PublicState {
   progress: number[];
   /** highest level index unlocked (playable) */
   unlocked: number;
+  /** cross-run progression: streaks, per-level best scores, aggregate stats */
+  meta: MetaState;
 }
 
 interface VTile {
@@ -112,6 +116,11 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   const tuning: Tuning = createTuning(MATCH3_TUNING, { storeKey: "cascade-tuning" });
   const psys: ParticleSystem = createParticleSystem({ cap: 600, rng: rng.fork(11) });
   const audio: AudioManager = createAudioManager();
+
+  // Cross-run progression (streaks, per-level best scores, aggregates), persisted.
+  const metaStore = createMetaStore({ key: "cascade-meta-v1" });
+  let metaState: MetaState = metaStore.get();
+  let levelRecorded = false; // record each level's result into meta exactly once
 
   // progress persistence (kit save would work; a tiny localStorage shim keeps the
   // engine dependency-light and is headless-safe).
@@ -198,8 +207,6 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   let idAt = new Int32Array(rows * cols).fill(-1);
   let nextId = 1;
 
-  let selected: Cell | null = null;
-  let dragStart: Cell | null = null;
   let busy = false;
 
   // animation timeline
@@ -277,6 +284,7 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
       totalLevels: N,
       progress: progress.slice(),
       unlocked,
+      meta: metaState,
     });
   }
 
@@ -314,8 +322,8 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     // Same curve params flow into the run so scoreTarget/moveBudget match the
     // level (the difficulty knobs actually move the target, not just the board).
     run = runReducer(initRun(index, curveParams), { type: "start", levelIndex: index, params: curveParams });
-    selected = null;
-    dragStart = null;
+    grid.clear();
+    levelRecorded = false;
     busy = false;
     scheduled = [];
     finalizePending = false;
@@ -328,7 +336,7 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   function toMenu() {
     screen = "menu";
     board = null;
-    selected = null;
+    grid.clear();
     emit();
   }
 
@@ -339,36 +347,29 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     if (c.row < 0 || c.col < 0 || c.row >= rows || c.col >= cols) return null;
     return c;
   }
-  const adjacent = (a: Cell, b: Cell) => Math.abs(a.row - b.row) + Math.abs(a.col - b.col) === 1;
+
+  // Tap-select-then-tap-neighbour + drag-to-swap, via the kit's reusable grid-input
+  // (the `touch` module is stick/look-shaped; this is the grid gesture home).
+  const grid = createGridInput({
+    hitTest: cellAt,
+    enabled: () => screen === "playing" && !busy && run.phase === "playing",
+    onSwap: (a, b) => trySwap(a, b),
+    onSelect: (c) => {
+      playFx(psys, "select", cx(c.col), cy(c.row), { color: hexToRgb(theme.palette.accent) });
+      audio.playTone(theme.audio.rootHz, 0.05, { type: "sine", gain: 0.15 });
+      emit();
+    },
+  });
 
   function pointerDown(px: number, py: number) {
     void audio.resume();
-    if (screen !== "playing" || busy || run.phase !== "playing") return;
-    const c = cellAt(px, py);
-    if (!c) return;
-    if (selected && adjacent(selected, c)) {
-      trySwap(selected, c);
-      selected = null;
-      dragStart = null;
-      return;
-    }
-    selected = c;
-    dragStart = c;
-    playFx(psys, "select", cx(c.col), cy(c.row), { color: hexToRgb(theme.palette.accent) });
-    audio.playTone(theme.audio.rootHz, 0.05, { type: "sine", gain: 0.15 });
-    emit();
+    grid.pointerDown(px, py);
   }
   function pointerMove(px: number, py: number) {
-    if (screen !== "playing" || busy || run.phase !== "playing" || !dragStart) return;
-    const c = cellAt(px, py);
-    if (c && !(c.row === dragStart.row && c.col === dragStart.col) && adjacent(dragStart, c)) {
-      trySwap(dragStart, c);
-      selected = null;
-      dragStart = null;
-    }
+    grid.pointerMove(px, py);
   }
   function pointerUp() {
-    dragStart = null;
+    grid.pointerUp(0, 0);
   }
 
   // ── swap + resolve → animation timeline ─────────────────────────────────
@@ -585,6 +586,17 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
       persist();
       playWinChime();
     }
+    // Record the run into cross-run meta exactly once, when it reaches a terminal
+    // phase (win or loss) — updates streaks, per-level best score, and aggregates.
+    if (!levelRecorded && (run.phase === "won" || run.phase === "lost")) {
+      levelRecorded = true;
+      metaState = metaStore.record({
+        levelId: String(run.levelIndex),
+        won: run.phase === "won",
+        score: run.score,
+        stars: run.stars,
+      });
+    }
     busy = false;
     emit();
   }
@@ -743,8 +755,9 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
       }
     }
     // selection highlight
-    if (selected) {
-      renderer.drawRect(originX + selected.col * cell, originY + selected.row * cell, cell, cell, {
+    const sel = grid.selected;
+    if (sel) {
+      renderer.drawRect(originX + sel.col * cell, originY + sel.row * cell, cell, cell, {
         stroke: theme.palette.glow,
         radius: 10,
       });
@@ -845,11 +858,13 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
       if (!board || busy || run.phase !== "playing") return false;
       const h = board.findHint();
       if (!h) return false;
-      selected = null;
+      grid.clear();
       trySwap(h[0], h[1]);
       return true;
     },
     getState: () => run,
+    /** Cross-run progression snapshot (streaks, per-level records, aggregates). */
+    getMeta: () => metaState,
     /** The live tuning store (same instance the ?tune panel binds to) — the
      *  preview harness mounts its own always-on panel + "bake" against this. */
     tuning,
@@ -892,7 +907,17 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     },
     /** Raw override map, for "bake" export. */
     themeOverridesSnapshot: () => JSON.parse(JSON.stringify(themeOverrides)) as Record<string, ThemeOverride>,
-    _debug: { get busy() { return busy; }, get board() { return board; } },
+    /** Wipe cross-run progression (streaks, records). */
+    resetMeta() {
+      metaStore.reset();
+      metaState = initMeta();
+      emit();
+    },
+    _debug: {
+      get busy() { return busy; },
+      get board() { return board; },
+      get selected() { return grid.selected; },
+    },
   };
 }
 

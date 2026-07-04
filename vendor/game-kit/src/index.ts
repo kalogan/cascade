@@ -17,6 +17,14 @@ export * from './net/index.js';
 export * from './presets/index.js';
 export * from './identity/index.js';
 export * from './touch/index.js';
+export * from './grid-input/index.js';
+export * from './meta/index.js';
+
+// NOTE: the 2D modules (board/render2d/fx2d/campaign/theme/tuning/perf) are NOT
+// re-exported here. This barrel pulls `three` (via fx/render/…), and a couple of
+// names collide with 3D equivalents (e.g. `ParticleSystem` in both `fx` and
+// `fx2d`). 2D games import them by subpath (`game-kit/board`) or via the dedicated
+// three-free 2D barrel `game-kit/2d` (see ./index2d.ts) — never through here.
 
 // three-dependent modules.
 export * from './lighting/index.js';

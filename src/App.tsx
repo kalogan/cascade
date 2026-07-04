@@ -7,6 +7,7 @@
 import { useRef, useState } from "react";
 import { type PublicState } from "./engine.js";
 import { useCascadeEngine } from "./useCascadeEngine.js";
+import { initMeta } from "game-kit/meta";
 
 const INIT: PublicState = {
   screen: "menu",
@@ -22,6 +23,7 @@ const INIT: PublicState = {
   totalLevels: 9,
   progress: [],
   unlocked: 0,
+  meta: initMeta(),
 };
 
 function Stars({ n, size = 16 }: { n: number; size?: number }) {
@@ -128,6 +130,15 @@ export function App() {
             <p style={{ textAlign: "center", opacity: 0.7, marginTop: 0, fontSize: 14 }}>
               Match 3+ · chain the cascades · three worlds
             </p>
+            {/* cross-run progression strip */}
+            <div style={{ display: "flex", justifyContent: "center", gap: 18, marginTop: 10, fontSize: 13, opacity: 0.9 }}>
+              <span title="current win-streak (best)">
+                🔥 {s.meta.currentStreak}
+                {s.meta.bestStreak > 0 ? <span style={{ opacity: 0.6 }}> / {s.meta.bestStreak}</span> : null}
+              </span>
+              <span title="total stars earned">★ {s.meta.totalStars}/{s.totalLevels * 3}</span>
+              <span title="levels cleared">✓ {s.meta.levelsCleared}/{s.totalLevels}</span>
+            </div>
             {[0, 1, 2].map((w) => (
               <div key={w} style={{ marginTop: 22 }}>
                 <div style={{ fontSize: 14, opacity: 0.85, marginBottom: 8, paddingLeft: 4 }}>
@@ -161,6 +172,9 @@ export function App() {
                       >
                         <span>{locked ? "🔒" : `Level ${l + 1}`}</span>
                         {!locked && <Stars n={stars} />}
+                        {!locked && (s.meta.levels[String(i)]?.bestScore ?? 0) > 0 && (
+                          <span style={{ fontSize: 11, opacity: 0.75 }}>best {s.meta.levels[String(i)]!.bestScore}</span>
+                        )}
                       </button>
                     );
                   })}

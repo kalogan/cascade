@@ -28,6 +28,7 @@ type WorldColors = {
 };
 import { MATCH3_TUNING, type TunableSpec } from "game-kit/tuning";
 import { difficultyForLevel, totalLevels, DEFAULT_DIFFICULTY } from "game-kit/campaign";
+import { initMeta } from "game-kit/meta";
 import { THEMES } from "game-kit/theme";
 
 const INIT: PublicState = {
@@ -44,6 +45,7 @@ const INIT: PublicState = {
   totalLevels: totalLevels(DEFAULT_DIFFICULTY),
   progress: [],
   unlocked: 0,
+  meta: initMeta(),
 };
 
 // Enumerate the real campaign curve → one descriptor per level (data-driven).
