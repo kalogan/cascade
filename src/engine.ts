@@ -69,6 +69,9 @@ const CLEAR_SECONDS = 0.16;
 // so it's easier to see it change" between worlds). One knob to nudge the feel.
 const BACKDROP_MOTION = 1.1;
 
+// Cross-fade duration when crossing into a new world's scenery (was a hard cut).
+const WORLD_FADE_SECONDS = 0.9;
+
 function hexToRgb(hex: string): [number, number, number] {
   let h = hex.replace("#", "");
   if (h.length === 3) h = h[0]! + h[0]! + h[1]! + h[1]! + h[2]! + h[2]!;
@@ -147,6 +150,12 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
 
   let time = 0; // wall seconds for backdrop drift
 
+  // World cross-fade: when startLevel crosses into a new world's theme we hold
+  // the outgoing scenery in `prevTheme` and ramp `worldFadeT` down to 0, blending
+  // the new backdrop in over the old so scenery *dissolves* between worlds.
+  let prevTheme: ThemeDef | null = null;
+  let worldFadeT = 0;
+
   const idx = (c: Cell) => c.row * cols + c.col;
   const cx = (col: number) => originX + col * cell + cell / 2;
   const cy = (row: number) => originY + row * cell + cell / 2;
@@ -205,8 +214,18 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   // ── level lifecycle ─────────────────────────────────────────────────────
   function startLevel(index: number) {
     index = Math.max(0, Math.min(N - 1, index));
+    const outgoingTheme = theme;
     level = difficultyForLevel(index);
     theme = THEMES[Math.min(THEMES.length - 1, level.world - 1)]!;
+    // Only cross-fade when the scenery actually changes (a new world), not on
+    // every level start within the same world.
+    if (screen === "playing" && outgoingTheme !== theme) {
+      prevTheme = outgoingTheme;
+      worldFadeT = WORLD_FADE_SECONDS;
+    } else {
+      prevTheme = null;
+      worldFadeT = 0;
+    }
     rows = level.boardH;
     cols = level.boardW;
     const lrng = createRng(0x5eed + index * 2654435761);
@@ -516,24 +535,33 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
         v.alpha = 1 - p;
       }
     }
+    if (worldFadeT > 0) {
+      worldFadeT = Math.max(0, worldFadeT - dt);
+      if (worldFadeT === 0) prevTheme = null;
+    }
     psys.step(dt);
     camera.update(dt);
   }
 
-  function drawBackdrop(ctx: CanvasRenderingContext2D) {
+  // Paint one theme's backdrop (sky gradient + drifting parallax bands) at a
+  // global opacity. `alpha` < 1 is what makes the world cross-fade read as a
+  // dissolve rather than a hard cut.
+  function drawBackdrop(ctx: CanvasRenderingContext2D, th: ThemeDef, alpha: number) {
     const g = ctx.createLinearGradient(0, 0, 0, cssH);
-    g.addColorStop(0, theme.backdrop.sky[0]);
-    g.addColorStop(1, theme.backdrop.sky[1]);
+    g.addColorStop(0, th.backdrop.sky[0]);
+    g.addColorStop(1, th.backdrop.sky[1]);
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, cssW, cssH);
+    ctx.globalAlpha = 1;
     // parallax bands drift + bob. BACKDROP_MOTION scales both (Director:
     // "+10% more movement so it's easier to see it change") — one knob to nudge.
-    const bands = theme.backdrop.parallax ?? [];
+    const bands = th.backdrop.parallax ?? [];
     for (let i = 0; i < bands.length; i++) {
       const b = bands[i]!;
       const speed = b.speed * BACKDROP_MOTION;
       const y = b.y * cssH + Math.sin(time * speed + i) * (b.amp * 40 * BACKDROP_MOTION);
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = 0.35 * alpha;
       ctx.fillStyle = b.color;
       const h = cssH * 0.16;
       ctx.beginPath();
@@ -547,16 +575,29 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     }
   }
 
+  // Backdrop layer with the world cross-fade applied: hold the outgoing scenery
+  // and dissolve the incoming one in over WORLD_FADE_SECONDS (smoothstep-eased).
+  function drawBackdropLayer(ctx: CanvasRenderingContext2D) {
+    if (worldFadeT > 0 && prevTheme) {
+      const lin = 1 - worldFadeT / WORLD_FADE_SECONDS; // 0 → 1
+      const p = lin * lin * (3 - 2 * lin); // smoothstep
+      drawBackdrop(ctx, prevTheme, 1);
+      drawBackdrop(ctx, theme, p);
+    } else {
+      drawBackdrop(ctx, theme, 1);
+    }
+  }
+
   function draw() {
     const ctx = renderer.ctx;
     if (!ctx) return;
     renderer.clear();
     if (screen !== "playing" || !board) {
       // menu backdrop only
-      drawBackdrop(ctx);
+      drawBackdropLayer(ctx);
       return;
     }
-    drawBackdrop(ctx);
+    drawBackdropLayer(ctx);
 
     ctx.save();
     camera.applyTo(ctx); // shake only (camera x/y/zoom stay at 0/0/1)
