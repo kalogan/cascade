@@ -3,6 +3,8 @@ import {
   resolveTheme,
   themeFromIdentity,
   isValidHex,
+  relativeLuminance,
+  contrastRatio,
   THEMES,
   type ThemeDef,
 } from './index.js';
@@ -222,6 +224,43 @@ describe('THEMES', () => {
     expect(grand).toBeDefined();
     // "grand" world's root sits lower (deeper/more dramatic) than the "gentle" opener.
     expect(grand!.audio.rootHz).toBeLessThan(gentle!.audio.rootHz);
+  });
+});
+
+// ── WCAG contrast (SC 1.4.11 — non-text/graphical-object contrast) ────────────
+
+describe('WCAG contrast helpers', () => {
+  it('relativeLuminance anchors black at 0 and white at 1', () => {
+    expect(relativeLuminance('#000000')).toBeCloseTo(0, 6);
+    expect(relativeLuminance('#ffffff')).toBeCloseTo(1, 6);
+  });
+
+  it('contrastRatio matches known WCAG pairs and is symmetric', () => {
+    expect(contrastRatio('#000000', '#ffffff')).toBeCloseTo(21, 4); // max
+    expect(contrastRatio('#123456', '#123456')).toBeCloseTo(1, 6); // identical
+    expect(contrastRatio('#ff0000', '#0000ff')).toBeCloseTo(contrastRatio('#0000ff', '#ff0000'), 6);
+  });
+});
+
+describe('THEMES tile/board contrast (WCAG SC 1.4.11 ≥ 3:1)', () => {
+  // Every tile is a graphical object sitting on the board surface; it must clear
+  // 3:1 or it reads as "washed / weird" and, at worst, vanishes into the board.
+  for (const theme of THEMES) {
+    it(`${theme.name}: every tile clears 3:1 against the board surface`, () => {
+      for (const tile of theme.palette.tiles) {
+        const ratio = contrastRatio(tile, theme.palette.surface);
+        expect(
+          ratio,
+          `${theme.name} tile ${tile} is only ${ratio.toFixed(2)}:1 vs surface ${theme.palette.surface}`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    });
+  }
+
+  it('tiles within a world are mutually distinguishable (no duplicate hexes)', () => {
+    for (const theme of THEMES) {
+      expect(new Set(theme.palette.tiles).size).toBe(theme.palette.tiles.length);
+    }
   });
 });
 

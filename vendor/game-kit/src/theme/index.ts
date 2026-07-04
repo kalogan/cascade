@@ -88,6 +88,32 @@ function hexToRgb(hex: string): [number, number, number] {
   return [r, g, b];
 }
 
+/**
+ * WCAG relative luminance of a hex color (0 = black, 1 = white), per the
+ * sRGB → linear formula in WCAG 2.x. Used to keep tile-vs-board contrast honest.
+ */
+export function relativeLuminance(hex: string): number {
+  const lin = (c: number): number => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  const [r, g, b] = hexToRgb(hex);
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+/**
+ * WCAG contrast ratio between two hex colors (1:1 .. 21:1). SC 1.4.11
+ * (Non-text Contrast) asks graphical objects to clear **3:1** against adjacent
+ * colors — the bar the theme test holds every tile to versus its board surface.
+ */
+export function contrastRatio(a: string, b: string): number {
+  const la = relativeLuminance(a);
+  const lb = relativeLuminance(b);
+  const hi = Math.max(la, lb);
+  const lo = Math.min(la, lb);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
 function clampByte(n: number): number {
   return Math.max(0, Math.min(255, Math.round(n)));
 }
@@ -261,11 +287,16 @@ const VERDANT_GLADE: ThemeDef = {
   id: 'verdant-glade',
   name: 'Verdant Glade',
   palette: {
-    bg: '#0d1a10',
-    surface: '#16281a',
+    // Board pulled down to a near-black green (was a mid-dark #16281a). The old
+    // lighter, saturated-green board let the bright yellow-green glow bleed into
+    // it as haze — tiles read "shiny/washed". A deep board makes the same glow a
+    // crisp rim (the trick World 3 already relies on) while keeping the verdant
+    // identity. Glow deepened a touch so it rims rather than blooms.
+    bg: '#071009',
+    surface: '#0e1a12',
     text: '#eef7e9',
     accent: '#8fd15a',
-    glow: '#c9f27a',
+    glow: '#b4e86a',
     tiles: ['#5ea8d8', '#6fbf4a', '#e3c65a', '#e08a4e', '#b86bfd', '#7fd1c3'],
   },
   backdrop: {
@@ -293,7 +324,9 @@ const EMBER_REACH: ThemeDef = {
     text: '#fff1e0',
     accent: '#f2872f',
     glow: '#ffb347',
-    tiles: ['#e0562a', '#f2a13a', '#c92f2f', '#3f6fae', '#2f8a6e', '#8a2f6e'],
+    // Last tile brightened from #8a2f6e (only 2.21:1 vs the board — failed WCAG
+    // SC 1.4.11's 3:1 for graphical objects; it vanished into the dark surface).
+    tiles: ['#e0562a', '#f2a13a', '#c92f2f', '#3f6fae', '#2f8a6e', '#cf5aa2'],
   },
   backdrop: {
     sky: ['#3a120a', '#f2872f'],
