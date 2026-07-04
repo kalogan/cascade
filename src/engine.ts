@@ -13,6 +13,12 @@ import { createBoard, type Board, type BoardEvent, type Cell } from "game-kit/bo
 import { createRenderer2D, createCamera2D, type Renderer2D, type Camera2D } from "game-kit/render2d";
 import { createParticleSystem, playFx, type ParticleSystem } from "game-kit/fx2d";
 import {
+  detectDeviceTier,
+  createFrameMonitor,
+  createAdaptiveQuality,
+  type DeviceTier,
+} from "game-kit/perf";
+import {
   difficultyForLevel,
   DEFAULT_DIFFICULTY,
   totalLevels,
@@ -72,6 +78,14 @@ const BACKDROP_MOTION = 1.1;
 // Cross-fade duration when crossing into a new world's scenery (was a hard cut).
 const WORLD_FADE_SECONDS = 0.9;
 
+// What each perf tier means for THIS game (perf owns *when* to switch; the game
+// owns *what* the switch scales). DPR cap is set once at boot from the detected
+// tier; the particle-budget multiplier adapts live as the frame monitor reacts.
+const TIER_DPR_CAP: Record<DeviceTier, number> = { low: 1, mid: 1.5, high: 2 };
+const TIER_PARTICLE_SCALE: Record<DeviceTier, number> = { low: 0.35, mid: 0.7, high: 1 };
+// Re-evaluate the adaptive tier this often (frames), not every frame.
+const TIER_TICK_FRAMES = 30;
+
 function hexToRgb(hex: string): [number, number, number] {
   let h = hex.replace("#", "");
   if (h.length === 3) h = h[0]! + h[0]! + h[1]! + h[1]! + h[2]! + h[2]!;
@@ -84,7 +98,16 @@ export interface EngineHooks {
 }
 
 export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
-  const renderer: Renderer2D = createRenderer2D(canvas, { dprCap: 2 });
+  // perf: pick a starting tier from the device (overridable with ?tier=low|mid|high),
+  // cap the render DPR to match, and thereafter let the adaptive controller thin
+  // the particle budget live if frames start dropping.
+  const startTier = detectDeviceTier();
+  const frameMon = createFrameMonitor();
+  const adaptive = createAdaptiveQuality({ start: startTier, monitor: frameMon });
+  let particleScale = TIER_PARTICLE_SCALE[startTier];
+  let tierTickCounter = 0;
+
+  const renderer: Renderer2D = createRenderer2D(canvas, { dprCap: TIER_DPR_CAP[startTier] });
   const rng = createRng(0xca5cade);
   const camera: Camera2D = createCamera2D({ rng: rng.fork(7) });
   const tuning: Tuning = createTuning(MATCH3_TUNING, { storeKey: "cascade-tuning" });
@@ -398,12 +421,12 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
           v.clearT = 0;
         }
       }
-      playFx(psys, "clear", cx(c.col), cy(c.row), { color, depth });
+      playFx(psys, "clear", cx(c.col), cy(c.row), { color, depth, countScale: particleScale });
     }
     // combo escalation: flourish + shake scale with cascade depth
     if (depth >= 2 || cells.length >= 5) {
       const c0 = cells[0]!;
-      playFx(psys, "combo-flourish", cx(c0.col), cy(c0.row), { color, depth });
+      playFx(psys, "combo-flourish", cx(c0.col), cy(c0.row), { color, depth, countScale: particleScale });
     }
     camera.addShake(t("shakeBase") * Math.min(4, depth) * (cells.length >= 5 ? 1.3 : 1));
     // SFX: base match tone + a RISING combo chime keyed to the theme's scale
@@ -507,6 +530,16 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   // ── per-frame update + draw ─────────────────────────────────────────────
   function update(dt: number) {
     time += dt;
+
+    // perf: record this frame and, a few times a second, let the adaptive
+    // controller re-decide the tier → particle budget (hysteresis lives in the
+    // kit; here we just read the tier it settles on).
+    frameMon.push(dt * 1000);
+    if (++tierTickCounter >= TIER_TICK_FRAMES) {
+      tierTickCounter = 0;
+      particleScale = TIER_PARTICLE_SCALE[adaptive.tick()];
+    }
+
     // fire due scheduled callbacks
     if (scheduled.length) {
       tl += dt * 1000;
@@ -523,9 +556,11 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
         tl = 0;
       }
     }
-    // tween tiles toward home; animate clearing pop
+    // tween tiles toward home; animate clearing pop; trail fast-falling tiles
     const k = 1 - Math.exp(-18 * dt);
+    const fallTrailGap = cell * 0.4; // how far below home before a tile "streaks"
     for (const v of vtiles.values()) {
+      const dy = cy(v.row) - v.y; // >0 while a tile is still dropping into place
       v.x += (cx(v.col) - v.x) * k;
       v.y += (cy(v.row) - v.y) * k;
       if (v.clearing) {
@@ -533,6 +568,11 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
         const p = Math.min(1, v.clearT / CLEAR_SECONDS);
         v.scale = 1 + p * 0.45;
         v.alpha = 1 - p;
+      } else if (dy > fallTrailGap && particleScale > 0 && rng.next() < 0.6) {
+        // faint streak dropped at the tile's current spot so gravity reads as
+        // motion; sparse (2 particles), budget-scaled, thinned by the rng gate.
+        const color = hexToRgb(theme.palette.tiles[v.kind % theme.palette.tiles.length] ?? theme.palette.accent);
+        playFx(psys, "fall-trail", v.x, v.y, { color, countScale: particleScale });
       }
     }
     if (worldFadeT > 0) {

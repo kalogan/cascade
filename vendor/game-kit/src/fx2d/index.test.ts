@@ -379,4 +379,42 @@ describe('fx2d / named presets', () => {
     playFx(sys, 'clear', 0, 0, { color }); // wants 12, cap is 10
     expect(sys.count).toBeLessThanOrEqual(10);
   });
+
+  it('"fall-trail" emits a sparse additive smear at the tile position', () => {
+    const sys = createParticleSystem({ cap: 32, rng: createRng(1) });
+    playFx(sys, 'fall-trail', 7, 9, { color });
+    expect(sys.count).toBeGreaterThan(0);
+    expect(sys.count).toBeLessThanOrEqual(3);
+    sys.forEach((p) => {
+      expect(p.blend).toBe('add');
+      expect(p.x).toBe(7);
+      expect(p.y).toBe(9);
+    });
+  });
+
+  it('countScale thins the burst presets', () => {
+    const full = createParticleSystem({ cap: 64, rng: createRng(1) });
+    playFx(full, 'clear', 0, 0, { color, countScale: 1 });
+    const thin = createParticleSystem({ cap: 64, rng: createRng(1) });
+    playFx(thin, 'clear', 0, 0, { color, countScale: 0.25 });
+    expect(thin.count).toBeLessThan(full.count);
+    expect(thin.count).toBeGreaterThan(0); // never silently vanishes at a small budget
+  });
+
+  it('countScale 0 drops a burst entirely', () => {
+    const sys = createParticleSystem({ cap: 64, rng: createRng(1) });
+    playFx(sys, 'clear', 0, 0, { color, countScale: 0 });
+    expect(sys.count).toBe(0);
+  });
+
+  it('countScale leaves the tactile presets (select/swap/spawn-pop) at full strength', () => {
+    for (const name of ['select', 'swap', 'spawn-pop'] as const) {
+      const full = createParticleSystem({ cap: 32, rng: createRng(1) });
+      playFx(full, name, 0, 0, { color, countScale: 1 });
+      const lowTier = createParticleSystem({ cap: 32, rng: createRng(1) });
+      playFx(lowTier, name, 0, 0, { color, countScale: 0 }); // would zero a burst
+      expect(lowTier.count).toBe(full.count);
+      expect(lowTier.count).toBeGreaterThan(0);
+    }
+  });
 });

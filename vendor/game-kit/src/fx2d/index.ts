@@ -343,9 +343,21 @@ export function createTween(opts: {
 // Named Match-3 emitter presets
 // ─────────────────────────────────────────────────────────────────────────
 
-export type FxPresetName = 'clear' | 'combo-flourish' | 'spawn-pop' | 'select' | 'swap';
+export type FxPresetName = 'clear' | 'combo-flourish' | 'spawn-pop' | 'select' | 'swap' | 'fall-trail';
 
 const FULL_CIRCLE: [number, number] = [0, Math.PI * 2];
+
+/**
+ * The expensive *burst* presets — the ones the perf-tier particle budget thins
+ * on weaker devices. The cheap tactile presets (`select`/`swap`/`spawn-pop`)
+ * are deliberately NOT in here: they're ≤6 particles and carry the game-feel,
+ * so `countScale` leaves them at full strength even on the lowest tier.
+ */
+const BUDGETED_PRESETS: ReadonlySet<FxPresetName> = new Set<FxPresetName>([
+  'clear',
+  'combo-flourish',
+  'fall-trail',
+]);
 
 /** Particle count for `combo-flourish`, strictly increasing with depth. */
 function comboFlourishCount(depth: number): number {
@@ -392,16 +404,35 @@ export function playFx(
   name: FxPresetName,
   x: number,
   y: number,
-  opts: { color: [number, number, number]; depth?: number; size?: number },
+  opts: {
+    color: [number, number, number];
+    depth?: number;
+    size?: number;
+    /**
+     * Particle-budget multiplier (0..1+) from the active perf tier. Scales the
+     * count of the *burst* presets only (see BUDGETED_PRESETS); a low-tier
+     * device passes e.g. 0.3 to thin bursts while the tactile presets stay full.
+     * Defaults to 1 (no scaling).
+     */
+    countScale?: number;
+  },
 ): void {
   const sizeFactor = opts.size ?? 1;
   const scaleRange = (r: [number, number]): [number, number] => [r[0] * sizeFactor, r[1] * sizeFactor];
+  const budget = BUDGETED_PRESETS.has(name) ? Math.max(0, opts.countScale ?? 1) : 1;
+  // Round so a small non-zero budget still yields at least 1 particle (a burst
+  // never silently vanishes unless the budget is exactly 0).
+  const scaleCount = (n: number): number => {
+    if (budget >= 1) return Math.round(n * budget);
+    if (budget <= 0) return 0;
+    return Math.max(1, Math.round(n * budget));
+  };
 
   switch (name) {
     case 'clear': {
       // 8-16 outward shards with gravity, additive, tinted, fade+shrink ~400ms.
       sys.emit(x, y, {
-        count: 12,
+        count: scaleCount(12),
         speed: [60, 160],
         angle: FULL_CIRCLE,
         gravity: 220,
@@ -417,7 +448,7 @@ export function playFx(
       const depth = opts.depth ?? 1;
       const shape = comboFlourishShape(depth);
       sys.emit(x, y, {
-        count: comboFlourishCount(depth),
+        count: scaleCount(comboFlourishCount(depth)),
         speed: shape.speed,
         angle: FULL_CIRCLE,
         gravity: shape.gravity,
@@ -467,6 +498,24 @@ export function playFx(
         size: scaleRange([1.5, 3]),
         color: opts.color,
         blend: 'normal',
+        spread: 2,
+      });
+      return;
+    }
+    case 'fall-trail': {
+      // A faint, short-lived smear dropped at a collapsing tile's position so
+      // gravity reads as motion, not teleport. Emitted per moved tile per frame,
+      // so it stays sparse (2 particles) and near-stationary — the tile falls
+      // past it, leaving the trail behind. Additive so it glints, not smudges.
+      sys.emit(x, y, {
+        count: scaleCount(2),
+        speed: [2, 12],
+        angle: [Math.PI * 0.25, Math.PI * 0.75], // downward-biased fan
+        gravity: 0,
+        life: [0.12, 0.2],
+        size: scaleRange([1.5, 3]),
+        color: opts.color,
+        blend: 'add',
         spread: 2,
       });
       return;
