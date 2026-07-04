@@ -33,6 +33,7 @@ import { createRng } from "game-kit/prng";
 import { createAudioManager, type AudioManager } from "game-kit/audio";
 import { createGridInput } from "game-kit/grid-input";
 import { createMetaStore, initMeta, type MetaState } from "game-kit/meta";
+import { createFixedLoop } from "game-kit/loop";
 
 export interface PublicState {
   screen: "menu" | "playing";
@@ -623,17 +624,10 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   }
 
   // ── per-frame update + draw ─────────────────────────────────────────────
+  // Fixed-step sim (dt is the fixed 60Hz step). perf frame-metering lives in the
+  // render callback (real frame dt), not here — see the loop setup above.
   function update(dt: number) {
     time += dt;
-
-    // perf: record this frame and, a few times a second, let the adaptive
-    // controller re-decide the tier → particle budget (hysteresis lives in the
-    // kit; here we just read the tier it settles on).
-    frameMon.push(dt * 1000);
-    if (++tierTickCounter >= TIER_TICK_FRAMES) {
-      tierTickCounter = 0;
-      particleScale = TIER_PARTICLE_SCALE[adaptive.tick()];
-    }
 
     // fire due scheduled callbacks
     if (scheduled.length) {
@@ -812,28 +806,27 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     ctx.globalAlpha = 1;
   }
 
-  // ── RAF loop ────────────────────────────────────────────────────────────
-  let raf = 0;
-  let last = 0;
-  let running = false;
-  function frame(now: number) {
-    if (!running) return;
-    const dt = last ? Math.min(0.05, (now - last) / 1000) : 0;
-    last = now;
-    update(dt);
-    draw();
-    raf = requestAnimationFrame(frame);
-  }
-  function start() {
-    if (running) return;
-    running = true;
-    last = 0;
-    raf = requestAnimationFrame(frame);
-  }
-  function stop() {
-    running = false;
-    if (raf) cancelAnimationFrame(raf);
-  }
+  // ── game loop ─────────────────────────────────────────────────────────────
+  // Kit fixed-timestep app-runtime: update() runs at a fixed 60Hz (0..maxSteps
+  // per frame), render once per frame; auto-pauses on a hidden tab. perf metering
+  // uses the REAL frame dt (render arg), not the fixed sim dt, so the adaptive
+  // quality controller still sees genuine frame drops.
+  const loop = createFixedLoop(
+    {
+      update,
+      render: (_alpha, frameDt) => {
+        frameMon.push(frameDt * 1000);
+        if (++tierTickCounter >= TIER_TICK_FRAMES) {
+          tierTickCounter = 0;
+          particleScale = TIER_PARTICLE_SCALE[adaptive.tick()];
+        }
+        draw();
+      },
+    },
+    { fixedHz: 60 },
+  );
+  const start = () => loop.start();
+  const stop = () => loop.stop();
 
   relayout();
   emit();

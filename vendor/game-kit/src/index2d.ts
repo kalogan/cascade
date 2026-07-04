@@ -14,6 +14,7 @@ export * from './tuning/index.js';
 export * from './perf/index.js';
 export * from './meta/index.js';
 export * from './grid-input/index.js';
+export * from './loop/index.js';
 
 // board and render2d each export an identical `Cell` ({ row, col }); an explicit
 // re-export resolves the two star exports so `import { Cell } from 'game-kit/2d'`
