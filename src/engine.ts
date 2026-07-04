@@ -34,6 +34,7 @@ import { createAudioManager, type AudioManager } from "game-kit/audio";
 import { createGridInput } from "game-kit/grid-input";
 import { createMetaStore, initMeta, type MetaState } from "game-kit/meta";
 import { createFixedLoop } from "game-kit/loop";
+import { bakeTileAtlas } from "./spriteTiles.js";
 
 export interface PublicState {
   screen: "menu" | "playing";
@@ -209,6 +210,7 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   let nextId = 1;
 
   let busy = false;
+  let spritesActive = false; // true once the ?sprites atlas is baked + installed
 
   // animation timeline
   let scheduled: Scheduled[] = [];
@@ -831,6 +833,26 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   relayout();
   emit();
 
+  // $0 proof of the generated-art pipeline: `?sprites` bakes procedural tiles into
+  // a spritesheet, loads it via `assets`, and blits through `render2d.setTileAtlas`.
+  // Off by default (procedural + colour knobs stay live); real FLUX art swaps into
+  // this exact seam later by changing only the atlas image source.
+  if (typeof document !== "undefined" && typeof location !== "undefined" && location.search.includes("sprites")) {
+    const kinds = THEMES[0]!.palette.tiles.length;
+    void bakeTileAtlas(
+      THEMES.map((th) => ({ tiles: th.palette.tiles, glow: th.palette.glow })),
+      kinds,
+      () => level.world - 1,
+    )
+      .then(({ atlas, frameFor }) => {
+        renderer.setTileAtlas(atlas, frameFor);
+        spritesActive = true;
+      })
+      .catch(() => {
+        /* proof-only; never break the game if baking fails */
+      });
+  }
+
   return {
     start,
     stop,
@@ -910,6 +932,7 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
       get busy() { return busy; },
       get board() { return board; },
       get selected() { return grid.selected; },
+      get spritesActive() { return spritesActive; },
     },
   };
 }
