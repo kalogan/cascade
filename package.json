@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:preview": "vite --open /preview.html",
     "build": "vite build",
+    "build:preview": "vite build --config vite.preview.config.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

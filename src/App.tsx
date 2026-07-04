@@ -4,8 +4,9 @@
  * Portrait / mobile-first; all game input is pointer-based (tap-to-select-then-
  * tap-neighbour, or drag-to-swap).
  */
-import { useEffect, useRef, useState } from "react";
-import { createEngine, type Engine, type PublicState } from "./engine.js";
+import { useRef, useState } from "react";
+import { type PublicState } from "./engine.js";
+import { useCascadeEngine } from "./useCascadeEngine.js";
 
 const INIT: PublicState = {
   screen: "menu",
@@ -33,53 +34,8 @@ function Stars({ n, size = 16 }: { n: number; size?: number }) {
 
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const engineRef = useRef<Engine | null>(null);
   const [s, setS] = useState<PublicState>(INIT);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const engine = createEngine(canvas, { onState: setS });
-    engineRef.current = engine;
-    // Debug/smoke seam: expose the engine so the headless runtime smoke can drive
-    // deterministic hinted swaps and level jumps. Harmless in prod (unused).
-    (window as unknown as { __cascade?: Engine }).__cascade = engine;
-    engine.start();
-
-    const ro = new ResizeObserver(() => engine.relayout());
-    ro.observe(canvas);
-    const onResize = () => engine.relayout();
-    window.addEventListener("resize", onResize);
-
-    const pos = (e: PointerEvent): [number, number] => {
-      const r = canvas.getBoundingClientRect();
-      return [e.clientX - r.left, e.clientY - r.top];
-    };
-    const down = (e: PointerEvent) => {
-      canvas.setPointerCapture?.(e.pointerId);
-      const [x, y] = pos(e);
-      engine.pointerDown(x, y);
-    };
-    const move = (e: PointerEvent) => {
-      const [x, y] = pos(e);
-      engine.pointerMove(x, y);
-    };
-    const up = () => engine.pointerUp();
-    canvas.addEventListener("pointerdown", down);
-    canvas.addEventListener("pointermove", move);
-    canvas.addEventListener("pointerup", up);
-    canvas.addEventListener("pointercancel", up);
-
-    return () => {
-      engine.stop();
-      ro.disconnect();
-      window.removeEventListener("resize", onResize);
-      canvas.removeEventListener("pointerdown", down);
-      canvas.removeEventListener("pointermove", move);
-      canvas.removeEventListener("pointerup", up);
-      canvas.removeEventListener("pointercancel", up);
-    };
-  }, []);
+  const engineRef = useCascadeEngine(canvasRef, setS);
 
   const eng = engineRef.current;
   const worldOf = (i: number) => Math.floor(i / 3) + 1;

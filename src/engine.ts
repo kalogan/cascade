@@ -71,12 +71,9 @@ interface Scheduled {
 
 const CLEAR_SECONDS = 0.16;
 
-// Global multiplier on parallax-band drift + bob (Director: "+10% more movement
-// so it's easier to see it change" between worlds). One knob to nudge the feel.
-const BACKDROP_MOTION = 1.1;
-
-// Cross-fade duration when crossing into a new world's scenery (was a hard cut).
-const WORLD_FADE_SECONDS = 0.9;
+// Backdrop drift multiplier and world cross-fade duration are now live tunables
+// (`backdropMotion`, `worldFadeMs` in MATCH3_TUNING → editable in the preview
+// harness / ?tune panel), read via `t()` below rather than baked here.
 
 // What each perf tier means for THIS game (perf owns *when* to switch; the game
 // owns *what* the switch scales). DPR cap is set once at boot from the detected
@@ -141,6 +138,21 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
 
   if (typeof document !== "undefined") mountTuningPanel(tuning, MATCH3_TUNING, { urlToggle: "tune" });
 
+  // Push the Shine tunables into the renderer, live. Applied on boot and on every
+  // tuning change so the preview harness / ?tune panel dials tile gloss with no
+  // recompile; the values mirror render2d's DEFAULT_TILE_SHINE.
+  function applyShine() {
+    renderer.setTileShine({
+      glowAlpha: tuning.get("glowAlpha"),
+      glowRadius: tuning.get("glowRadius"),
+      sheenLight: tuning.get("sheenLight"),
+      sheenShadow: tuning.get("sheenShadow"),
+      highlight: tuning.get("highlight"),
+    });
+  }
+  applyShine();
+  tuning.subscribe(applyShine);
+
   // ── mutable game state ──────────────────────────────────────────────────
   let screen: PublicState["screen"] = "menu";
   let level: LevelConfig = difficultyForLevel(0);
@@ -178,6 +190,7 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   // the new backdrop in over the old so scenery *dissolves* between worlds.
   let prevTheme: ThemeDef | null = null;
   let worldFadeT = 0;
+  let worldFadeDur = 0.9; // seconds; captured from the `worldFadeMs` tunable per fade
 
   const idx = (c: Cell) => c.row * cols + c.col;
   const cx = (col: number) => originX + col * cell + cell / 2;
@@ -244,7 +257,8 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     // every level start within the same world.
     if (screen === "playing" && outgoingTheme !== theme) {
       prevTheme = outgoingTheme;
-      worldFadeT = WORLD_FADE_SECONDS;
+      worldFadeDur = t("worldFadeMs") / 1000;
+      worldFadeT = worldFadeDur;
     } else {
       prevTheme = null;
       worldFadeT = 0;
@@ -594,13 +608,14 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, cssW, cssH);
     ctx.globalAlpha = 1;
-    // parallax bands drift + bob. BACKDROP_MOTION scales both (Director:
-    // "+10% more movement so it's easier to see it change") — one knob to nudge.
+    // parallax bands drift + bob, scaled by the live `backdropMotion` tunable
+    // (Director: "+10% more movement so it's easier to see it change").
+    const motion = t("backdropMotion");
     const bands = th.backdrop.parallax ?? [];
     for (let i = 0; i < bands.length; i++) {
       const b = bands[i]!;
-      const speed = b.speed * BACKDROP_MOTION;
-      const y = b.y * cssH + Math.sin(time * speed + i) * (b.amp * 40 * BACKDROP_MOTION);
+      const speed = b.speed * motion;
+      const y = b.y * cssH + Math.sin(time * speed + i) * (b.amp * 40 * motion);
       ctx.globalAlpha = 0.35 * alpha;
       ctx.fillStyle = b.color;
       const h = cssH * 0.16;
@@ -616,10 +631,10 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   }
 
   // Backdrop layer with the world cross-fade applied: hold the outgoing scenery
-  // and dissolve the incoming one in over WORLD_FADE_SECONDS (smoothstep-eased).
+  // and dissolve the incoming one in over `worldFadeDur` (smoothstep-eased).
   function drawBackdropLayer(ctx: CanvasRenderingContext2D) {
-    if (worldFadeT > 0 && prevTheme) {
-      const lin = 1 - worldFadeT / WORLD_FADE_SECONDS; // 0 → 1
+    if (worldFadeT > 0 && prevTheme && worldFadeDur > 0) {
+      const lin = 1 - worldFadeT / worldFadeDur; // 0 → 1
       const p = lin * lin * (3 - 2 * lin); // smoothstep
       drawBackdrop(ctx, prevTheme, 1);
       drawBackdrop(ctx, theme, p);
@@ -748,6 +763,9 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
       return true;
     },
     getState: () => run,
+    /** The live tuning store (same instance the ?tune panel binds to) — the
+     *  preview harness mounts its own always-on panel + "bake" against this. */
+    tuning,
     _debug: { get busy() { return busy; }, get board() { return board; } },
   };
 }

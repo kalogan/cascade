@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRenderer2D, createCamera2D, type Cell } from './index.js';
+import { createRenderer2D, createCamera2D, DEFAULT_TILE_SHINE, type Cell } from './index.js';
 import { createRng } from '../prng/index.js';
 
 // ── A tiny call-recording fake CanvasRenderingContext2D ─────────────────────
@@ -74,6 +74,33 @@ function makeFakeCanvas(ctx: ReturnType<typeof makeFakeCtx>) {
 }
 
 // ── Renderer2D: headless smoke ───────────────────────────────────────────────
+
+describe('createRenderer2D — tile shine config', () => {
+  it('defaults to DEFAULT_TILE_SHINE and is a copy (not the shared object)', () => {
+    const r = createRenderer2D(null);
+    expect(r.getTileShine()).toEqual(DEFAULT_TILE_SHINE);
+    expect(r.getTileShine()).not.toBe(DEFAULT_TILE_SHINE);
+  });
+
+  it('merges the constructor tileShine over the defaults', () => {
+    const r = createRenderer2D(null, { tileShine: { glowAlpha: 0 } });
+    expect(r.getTileShine().glowAlpha).toBe(0);
+    expect(r.getTileShine().sheenLight).toBe(DEFAULT_TILE_SHINE.sheenLight); // untouched
+  });
+
+  it('setTileShine live-merges partial updates', () => {
+    const r = createRenderer2D(null);
+    r.setTileShine({ glowAlpha: 0.5, highlight: 0.1 });
+    expect(r.getTileShine().glowAlpha).toBe(0.5);
+    expect(r.getTileShine().highlight).toBe(0.1);
+    expect(r.getTileShine().glowRadius).toBe(DEFAULT_TILE_SHINE.glowRadius);
+  });
+
+  it('does not throw when drawing with shine set (headless no-op path)', () => {
+    const r = createRenderer2D(null, { tileShine: { glowAlpha: 1, sheenLight: 0.8 } });
+    expect(() => r.drawTile(0, 0, 0, 32, { fill: '#ff0044', glow: '#ff0044' })).not.toThrow();
+  });
+});
 
 describe('createRenderer2D — headless safety', () => {
   it('is a safe no-op with a null canvas: ctx is null, draws never throw', () => {
