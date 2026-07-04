@@ -833,10 +833,12 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   relayout();
   emit();
 
-  // Generated tile art: `?sprites` loads /tiles.png (FLUX atlas) via `assets` and
-  // blits it through `render2d.setTileAtlas`. Opt-in while under review; flip on by
-  // default once approved. Falls back to procedural if the atlas fails to load.
-  if (typeof document !== "undefined" && typeof location !== "undefined" && location.search.includes("sprites")) {
+  // Generated tile art (default): load /tiles.png (FLUX atlas) via `assets` and
+  // blit it through `render2d.setTileAtlas`. `?procedural` opts out (back to the
+  // procedural silhouettes + live colour knobs). Falls back to procedural if the
+  // atlas fails to load.
+  const useSprites = typeof location === "undefined" || !location.search.includes("procedural");
+  if (typeof document !== "undefined" && useSprites) {
     void loadTileAtlas(() => level.world - 1)
       .then(({ atlas, frameFor }) => {
         renderer.setTileAtlas(atlas, frameFor);
