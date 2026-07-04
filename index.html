@@ -7,20 +7,20 @@
     <meta name="description" content="Swap, match, and chain cascade combos across worlds that shift beneath you. A themed match-3, playable in your browser." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/favicon.svg" />
-    <!-- Open Graph / Twitter link preview. og:image is relative for now; at deploy
-         time set it (and add og:url) to the absolute deployed URL for scrapers that
-         require it (Twitter/Facebook). Modern scrapers resolve relative fine. -->
+    <!-- Open Graph / Twitter link preview. Absolute URLs (deployed origin) so
+         scrapers that require them (Twitter/Facebook/iMessage) resolve the card. -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Cascade" />
+    <meta property="og:url" content="https://cascade-gilt.vercel.app/" />
     <meta property="og:title" content="Cascade — a themed match-3" />
     <meta property="og:description" content="Swap, match, and chain cascade combos across worlds that shift beneath you." />
-    <meta property="og:image" content="/og.png" />
+    <meta property="og:image" content="https://cascade-gilt.vercel.app/og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Cascade — a themed match-3" />
     <meta name="twitter:description" content="Swap, match, and chain cascade combos across worlds that shift beneath you." />
-    <meta name="twitter:image" content="/og.png" />
+    <meta name="twitter:image" content="https://cascade-gilt.vercel.app/og.png" />
     <style>
       html, body, #root { margin: 0; height: 100%; overscroll-behavior: none; }
       /* The game owns all taps/drags (tile select, swap-drag); without touch-action:none
