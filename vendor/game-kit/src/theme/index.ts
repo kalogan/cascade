@@ -323,8 +323,11 @@ const EMBER_REACH: ThemeDef = {
   id: 'ember-reach',
   name: 'Ember Reach',
   palette: {
-    bg: '#1f0f0a',
-    surface: '#2e150c',
+    // Board pulled darker + less orange (was #1f0f0a / #2e150c) so the warm
+    // orange/red tiles pop instead of blending into a warm board (Director:
+    // "the orange level is hard to see").
+    bg: '#100603',
+    surface: '#1b0d06',
     text: '#fff1e0',
     accent: '#f2872f',
     glow: '#ffb347',

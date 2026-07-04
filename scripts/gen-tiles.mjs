@@ -50,12 +50,18 @@ const WORLDS = [
   { w: 2, mood: "cosmic luminous", palette: "cool purple, magenta and cyan" },
 ];
 const prompt = (motif, mood, palette) =>
-  `A single ${motif} game tile icon, ${mood} style, ${palette} colours, centered on a plain flat black background, bold clean silhouette, soft inner shading, glossy mobile match-3 gem art, no text, no scene, no drop shadow`;
+  `A single ${motif} game tile icon, ${mood} style, ${palette} colours, the object alone floating on a plain flat pure-black background, bold clean silhouette filling most of the frame, soft inner shading, glossy mobile match-3 gem art, no text, no scene, no drop shadow, no frame, no border, no rounded panel, no background box, no card`;
+
+const onlyIdx = args.indexOf("--only");
+const only = onlyIdx >= 0 ? new Set(args[onlyIdx + 1].split(",")) : null;
 
 const jobs = [];
 for (const world of WORLDS)
-  for (const kind of KINDS)
-    jobs.push({ id: `w${world.w}_k${kind.k}`, prompt: prompt(kind.motif, world.mood, world.palette) });
+  for (const kind of KINDS) {
+    const id = `w${world.w}_k${kind.k}`;
+    if (only && !only.has(id)) continue;
+    jobs.push({ id, prompt: prompt(kind.motif, world.mood, world.palette) });
+  }
 
 const estCost = jobs.length * COST_PER_IMAGE;
 
