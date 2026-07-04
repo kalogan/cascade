@@ -89,37 +89,44 @@ export function App() {
     <div style={{ position: "relative", width: "100%", height: "100%", background: "#0b0d16", overflow: "hidden" }}>
       <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block", touchAction: "none" }} />
 
-      {/* ── in-game HUD ── */}
+      {/* ── in-game HUD: the top bar is ONLY the two numbers that matter mid-level
+             (Director: "make the focus of the top bar the points needed and the
+             moves left"); world/level identity lives in the bottom strip. ── */}
       {s.screen === "playing" && (
-        <div style={{ position: "absolute", top: 0, left: 0, right: 0, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", color: "#fff", fontFamily: "system-ui, sans-serif", pointerEvents: "none", textShadow: "0 1px 3px rgba(0,0,0,.6)" }}>
-          <div>
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, color: "#fff", fontFamily: "system-ui, sans-serif", pointerEvents: "none", textShadow: "0 1px 3px rgba(0,0,0,.6)" }}>
+          <div style={{ flex: 1, maxWidth: 260 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span style={{ fontSize: 30, fontWeight: 800, lineHeight: 1 }}>{s.score}</span>
+              <span style={{ fontSize: 14, opacity: 0.85 }}>/ {s.scoreTarget} pts</span>
+            </div>
+            <div style={{ height: 8, background: "rgba(255,255,255,.2)", borderRadius: 5, marginTop: 6, overflow: "hidden" }}>
+              <div style={{ width: `${Math.min(100, (s.score / Math.max(1, s.scoreTarget)) * 100)}%`, height: "100%", background: "#ffe08a", borderRadius: 5 }} />
+            </div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1, color: s.movesLeft <= 4 ? "#ff9a8a" : "#fff" }}>{s.movesLeft}</div>
+            <div style={{ fontSize: 13, opacity: 0.85 }}>moves left</div>
+          </div>
+        </div>
+      )}
+
+      {/* ── bottom strip while playing: Levels button (left) + world/level identity
+             (right) — moved down from the top bar so the top stays scoreboard-only. ── */}
+      {s.screen === "playing" && s.phase === "playing" && (
+        <>
+          <button
+            onClick={() => eng?.toMenu()}
+            style={{ position: "absolute", bottom: 10, left: 12, padding: "8px 14px", minHeight: 44, borderRadius: 10, border: "none", background: "rgba(255,255,255,.14)", color: "#fff", fontSize: 14, cursor: "pointer" }}
+          >
+            ☰ Levels
+          </button>
+          <div style={{ position: "absolute", bottom: 12, right: 14, textAlign: "right", color: "#fff", fontFamily: "system-ui, sans-serif", pointerEvents: "none", textShadow: "0 1px 3px rgba(0,0,0,.6)" }}>
             <div style={{ fontSize: 13, opacity: 0.85 }}>
               World {s.world} · {s.worldName}
             </div>
             <div style={{ fontSize: 12, opacity: 0.7 }}>Level {s.levelInWorld} of 3</div>
           </div>
-          <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>{s.score}</div>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>target {s.scoreTarget}</div>
-            <div style={{ width: 120, height: 6, background: "rgba(255,255,255,.2)", borderRadius: 4, marginTop: 4, overflow: "hidden" }}>
-              <div style={{ width: `${Math.min(100, (s.score / Math.max(1, s.scoreTarget)) * 100)}%`, height: "100%", background: "#ffe08a" }} />
-            </div>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1, color: s.movesLeft <= 4 ? "#ff9a8a" : "#fff" }}>{s.movesLeft}</div>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>moves</div>
-          </div>
-        </div>
-      )}
-
-      {/* ── menu button while playing ── */}
-      {s.screen === "playing" && s.phase === "playing" && (
-        <button
-          onClick={() => eng?.toMenu()}
-          style={{ position: "absolute", bottom: 10, left: 12, padding: "8px 14px", minHeight: 44, borderRadius: 10, border: "none", background: "rgba(255,255,255,.14)", color: "#fff", fontSize: 14, cursor: "pointer" }}
-        >
-          ☰ Levels
-        </button>
+        </>
       )}
 
       {/* ── win / lose overlay ── */}

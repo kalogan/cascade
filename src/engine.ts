@@ -65,6 +65,10 @@ interface Scheduled {
 
 const CLEAR_SECONDS = 0.16;
 
+// Global multiplier on parallax-band drift + bob (Director: "+10% more movement
+// so it's easier to see it change" between worlds). One knob to nudge the feel.
+const BACKDROP_MOTION = 1.1;
+
 function hexToRgb(hex: string): [number, number, number] {
   let h = hex.replace("#", "");
   if (h.length === 3) h = h[0]! + h[0]! + h[1]! + h[1]! + h[2]! + h[2]!;
@@ -454,9 +458,31 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
       progress[run.levelIndex] = Math.max(progress[run.levelIndex] ?? 0, run.stars);
       unlocked = Math.max(unlocked, Math.min(N - 1, run.levelIndex + 1));
       persist();
+      playWinChime();
     }
     busy = false;
     emit();
+  }
+
+  /**
+   * Level-cleared chime — an ascending 4-note arpeggio up the ACTIVE THEME's
+   * scale, landing on the octave. Same tonal family as the rising combo chime
+   * (Director: keep the win moment in the sound-world he already likes), a
+   * touch longer and warmer so it reads "ceremony", not "another cascade".
+   * setTimeout staggering mirrors GYRE's start-chime precedent; late timeouts
+   * after a dispose are harmless no-ops on a closed AudioContext.
+   */
+  function playWinChime() {
+    const scale = theme.audio.scaleSemitones;
+    const steps = [scale[0] ?? 0, scale[2] ?? 4, scale[4] ?? 7, 12]; // triad walk-up → octave
+    steps.forEach((semis, i) => {
+      setTimeout(() => {
+        audio.playTone(theme.audio.rootHz * Math.pow(2, semis / 12), 0.22, {
+          type: "triangle",
+          gain: 0.26,
+        });
+      }, i * 130);
+    });
   }
 
   // ── per-frame update + draw ─────────────────────────────────────────────
@@ -500,16 +526,18 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     g.addColorStop(1, theme.backdrop.sky[1]);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, cssW, cssH);
-    // parallax bands drift + bob
+    // parallax bands drift + bob. BACKDROP_MOTION scales both (Director:
+    // "+10% more movement so it's easier to see it change") — one knob to nudge.
     const bands = theme.backdrop.parallax ?? [];
     for (let i = 0; i < bands.length; i++) {
       const b = bands[i]!;
-      const y = b.y * cssH + Math.sin(time * b.speed + i) * (b.amp * 40);
+      const speed = b.speed * BACKDROP_MOTION;
+      const y = b.y * cssH + Math.sin(time * speed + i) * (b.amp * 40 * BACKDROP_MOTION);
       ctx.globalAlpha = 0.35;
       ctx.fillStyle = b.color;
       const h = cssH * 0.16;
       ctx.beginPath();
-      const drift = ((time * b.speed * 24) % (cssW + 200)) - 100;
+      const drift = ((time * speed * 24) % (cssW + 200)) - 100;
       ctx.ellipse(drift, y, cssW * 0.7, h, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.beginPath();
