@@ -34,7 +34,7 @@ import { createAudioManager, type AudioManager } from "game-kit/audio";
 import { createGridInput } from "game-kit/grid-input";
 import { createMetaStore, initMeta, type MetaState } from "game-kit/meta";
 import { createFixedLoop } from "game-kit/loop";
-import { bakeTileAtlas } from "./spriteTiles.js";
+import { loadTileAtlas } from "./spriteTiles.js";
 
 export interface PublicState {
   screen: "menu" | "playing";
@@ -833,23 +833,17 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   relayout();
   emit();
 
-  // $0 proof of the generated-art pipeline: `?sprites` bakes procedural tiles into
-  // a spritesheet, loads it via `assets`, and blits through `render2d.setTileAtlas`.
-  // Off by default (procedural + colour knobs stay live); real FLUX art swaps into
-  // this exact seam later by changing only the atlas image source.
+  // Generated tile art: `?sprites` loads /tiles.png (FLUX atlas) via `assets` and
+  // blits it through `render2d.setTileAtlas`. Opt-in while under review; flip on by
+  // default once approved. Falls back to procedural if the atlas fails to load.
   if (typeof document !== "undefined" && typeof location !== "undefined" && location.search.includes("sprites")) {
-    const kinds = THEMES[0]!.palette.tiles.length;
-    void bakeTileAtlas(
-      THEMES.map((th) => ({ tiles: th.palette.tiles, glow: th.palette.glow })),
-      kinds,
-      () => level.world - 1,
-    )
+    void loadTileAtlas(() => level.world - 1)
       .then(({ atlas, frameFor }) => {
         renderer.setTileAtlas(atlas, frameFor);
         spritesActive = true;
       })
       .catch(() => {
-        /* proof-only; never break the game if baking fails */
+        /* never break the game if the atlas fails to load */
       });
   }
 
