@@ -19,6 +19,7 @@
  */
 
 import { createRng, type Rng } from '../prng/index.js';
+import type { SpriteAtlas } from '../sprite/index.js';
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -95,6 +96,14 @@ export interface Renderer2D {
   setTileShine(partial: Partial<TileShine>): void;
   /** Current tile-shine budget (for a panel to read / bake). */
   getTileShine(): TileShine;
+  /**
+   * Install a sprite atlas so `drawTile` BLITS a frame (real art) instead of
+   * drawing the procedural silhouette. `frameFor(shape)` maps a tile kind to a
+   * frame name; when it returns undefined (or the frame is missing) that tile
+   * falls back to procedural. Pass `null` to remove the atlas. This is the
+   * "generated art drops into the drawTile seam" path.
+   */
+  setTileAtlas(atlas: SpriteAtlas | null, frameFor?: (shape: number) => string | undefined): void;
 }
 
 /**
@@ -136,6 +145,8 @@ export function createRenderer2D(
 ): Renderer2D {
   const dprCap = opts.dprCap ?? 2;
   const tileShine: TileShine = { ...DEFAULT_TILE_SHINE, ...(opts.tileShine ?? {}) };
+  let tileAtlas: SpriteAtlas | null = null;
+  let tileFrameFor: (shape: number) => string | undefined = () => undefined;
 
   let ctx: CanvasRenderingContext2D | null = null;
   if (canvas) {
@@ -233,6 +244,23 @@ export function createRenderer2D(
       ctx.restore();
     }
 
+    // Sprite path: if an atlas is installed and maps this kind to a frame, blit
+    // the frame (real art) at the tile footprint and skip the procedural draw.
+    if (tileAtlas) {
+      const frameName = tileFrameFor(kind);
+      if (frameName && tileAtlas.has(frameName)) {
+        tileAtlas.draw(ctx, frameName, cx - r, cy - r, r * 2, r * 2);
+        if (stroke) {
+          buildShapePath(ctx, kind, cx, cy, r);
+          ctx.lineWidth = Math.max(1, size * 0.035);
+          ctx.strokeStyle = stroke;
+          ctx.stroke();
+        }
+        ctx.restore();
+        return;
+      }
+    }
+
     // Base fill: a real gradient when `fill` parses as #rrggbb, else the flat
     // color (the sheen pass below still gives it a bevel either way, so any
     // CSS color string — named, rgb(), hsl() — degrades gracefully).
@@ -314,6 +342,10 @@ export function createRenderer2D(
     },
     getTileShine(): TileShine {
       return { ...tileShine };
+    },
+    setTileAtlas(atlas: SpriteAtlas | null, frameFor?: (shape: number) => string | undefined): void {
+      tileAtlas = atlas;
+      tileFrameFor = frameFor ?? (() => undefined);
     },
   };
 }

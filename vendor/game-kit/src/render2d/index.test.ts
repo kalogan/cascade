@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createRenderer2D, createCamera2D, DEFAULT_TILE_SHINE, type Cell } from './index.js';
 import { createRng } from '../prng/index.js';
+import type { SpriteAtlas } from '../sprite/index.js';
 
 // ── A tiny call-recording fake CanvasRenderingContext2D ─────────────────────
 //
@@ -52,6 +53,7 @@ function makeFakeCtx() {
     fill: () => bump('fill'),
     stroke: () => bump('stroke'),
     fillText: () => bump('fillText'),
+    drawImage: () => bump('drawImage'),
     createLinearGradient: () => {
       bump('createLinearGradient');
       return makeFakeGradient();
@@ -167,6 +169,33 @@ describe('createRenderer2D — stub ctx issues real canvas ops', () => {
     // The shape path is traced once per pass: glow disc, base fill, sheen
     // clip, highlight clip, stroke = 5 beginPath calls.
     expect(ctx.calls.beginPath).toBe(5);
+  });
+
+  it('setTileAtlas makes drawTile BLIT a frame instead of drawing the procedural shape', () => {
+    const ctx = makeFakeCtx();
+    const renderer = createRenderer2D(makeFakeCanvas(ctx));
+    renderer.resize(100, 100);
+    // a minimal atlas whose frame 'leaf' exists for kind 1
+    const atlas = {
+      has: (n: string) => n === 'leaf',
+      frame: () => undefined,
+      names: ['leaf'],
+      draw: (c: CanvasRenderingContext2D) => ((c as unknown as { drawImage(): void }).drawImage(), true),
+    };
+    renderer.setTileAtlas(atlas as unknown as SpriteAtlas, (k) => (k === 1 ? 'leaf' : undefined));
+    renderer.drawTile(1, 0, 0, 40, { fill: '#3366ff' }); // kind 1 → 'leaf' → blit
+    expect(ctx.calls.drawImage).toBe(1);
+    expect(ctx.calls.fillRect ?? 0).toBe(0); // no procedural sheen/highlight overlays
+
+    // kind 2 has no frame → falls back to procedural (no new drawImage)
+    renderer.drawTile(2, 0, 0, 40, { fill: '#3366ff' });
+    expect(ctx.calls.drawImage).toBe(1);
+    expect((ctx.calls.fillRect ?? 0)).toBeGreaterThan(0);
+
+    // removing the atlas restores procedural for all kinds
+    renderer.setTileAtlas(null);
+    renderer.drawTile(1, 0, 0, 40, { fill: '#3366ff' });
+    expect(ctx.calls.drawImage).toBe(1); // unchanged
   });
 
   it('drawTile without glow/stroke still fills + bevels but skips glow/stroke ops', () => {
