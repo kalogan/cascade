@@ -300,11 +300,15 @@ const VERDANT_GLADE: ThemeDef = {
     tiles: ['#5ea8d8', '#6fbf4a', '#e3c65a', '#e08a4e', '#b86bfd', '#7fd1c3'],
   },
   backdrop: {
-    sky: ['#bfe3f0', '#fef3c2'],
-    fog: '#dff2c8',
+    // Deepened from a near-white pastel (#bfe3f0 -> #fef3c2) that read washed-out
+    // and bright, pulling the eye off the board. A calmer, more saturated glade
+    // gradient recedes behind the dark board and lets the drifting hill bands
+    // actually read — still gentle, just not blinding.
+    sky: ['#6f9fb0', '#b6a86a'],
+    fog: '#8fae74',
     parallax: [
-      { color: '#9fd17a', y: 0.7, amp: 0.05, speed: 0.15 },
-      { color: '#cfead0', y: 0.85, amp: 0.03, speed: 0.08 },
+      { color: '#5f9a58', y: 0.7, amp: 0.05, speed: 0.15 },
+      { color: '#87b384', y: 0.85, amp: 0.03, speed: 0.08 },
     ],
   },
   audio: { scaleSemitones: [0, 2, 4, 5, 7, 9, 11], rootHz: 261.63 },

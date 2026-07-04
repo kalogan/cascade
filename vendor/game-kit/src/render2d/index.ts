@@ -92,6 +92,21 @@ export interface Renderer2D {
 }
 
 /**
+ * `drawTile` shine budget — kept deliberately restrained so tiles read as calm,
+ * matte-ish gems rather than wet glass. Raised values here re-introduce the
+ * "too shiny, pulls the eye off the board" look; tune here, one place.
+ *   GLOW_*      — the soft additive aura behind a tile (was the biggest eye-grab)
+ *   SHEEN_*     — the diagonal bevel light/shadow
+ *   HIGHLIGHT_* — the small glassy hotspot near the upper-left
+ */
+const GLOW_RADIUS_MUL = 1.3; // was 1.6 — a tighter rim, less bleed onto the board
+const GLOW_ALPHA = 0.38; // additive glow scaled right down from full strength
+const SHEEN_LIGHT = 0.26; // was 0.55 — top-left bevel light
+const SHEEN_LIGHT_SOFT = 0.05; // was 0.08
+const SHEEN_SHADOW = 0.22; // was 0.28 — bottom-right bevel shadow
+const HIGHLIGHT_ALPHA = 0.2; // was 0.5 — glassy hotspot
+
+/**
  * Create a Canvas2D renderer bound to `canvas`. Context-guarded: if `canvas`
  * is null, or `getContext('2d')` returns null (headless), `ctx` is null and
  * every draw call becomes a safe no-op.
@@ -186,7 +201,8 @@ export function createRenderer2D(
     if (glow) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      const glowR = Math.max(r * 1.6, 0.001);
+      ctx.globalAlpha = alpha * GLOW_ALPHA; // dim the aura so it rims, not blooms
+      const glowR = Math.max(r * GLOW_RADIUS_MUL, 0.001);
       const glowGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowR);
       glowGrad.addColorStop(0, glow);
       glowGrad.addColorStop(1, 'rgba(0,0,0,0)');
@@ -220,10 +236,10 @@ export function createRenderer2D(
     buildShapePath(ctx, kind, cx, cy, r);
     ctx.clip();
     const sheen = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
-    sheen.addColorStop(0, 'rgba(255,255,255,0.55)');
-    sheen.addColorStop(0.45, 'rgba(255,255,255,0.08)');
+    sheen.addColorStop(0, `rgba(255,255,255,${SHEEN_LIGHT})`);
+    sheen.addColorStop(0.45, `rgba(255,255,255,${SHEEN_LIGHT_SOFT})`);
     sheen.addColorStop(0.55, 'rgba(0,0,0,0.03)');
-    sheen.addColorStop(1, 'rgba(0,0,0,0.28)');
+    sheen.addColorStop(1, `rgba(0,0,0,${SHEEN_SHADOW})`);
     ctx.globalCompositeOperation = 'overlay';
     ctx.fillStyle = sheen;
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
@@ -242,7 +258,7 @@ export function createRenderer2D(
       cy - r * 0.38,
       Math.max(r * 0.55, 0.001),
     );
-    hi.addColorStop(0, 'rgba(255,255,255,0.5)');
+    hi.addColorStop(0, `rgba(255,255,255,${HIGHLIGHT_ALPHA})`);
     hi.addColorStop(1, 'rgba(255,255,255,0)');
     ctx.fillStyle = hi;
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
