@@ -27,12 +27,20 @@ export interface BoardConfig {
   cols: number;
   kinds: number;
   rng: Rng;
+  /**
+   * Number of DISTINCT cells to seed as "locked" (crated) after the fair,
+   * match-free grid is generated. Defaults to 0. Clamped to [0, rows*cols].
+   * Locked cells hold a normal tile but cannot be swapped or matched until
+   * freed. Chosen deterministically from the injected rng.
+   */
+  lockedCount?: number;
 }
 
 export type BoardEvent =
   | { type: 'clear'; cells: Cell[]; kind: TileKind; cascadeDepth: number }
   | { type: 'fall'; moves: { from: Cell; to: Cell; kind: TileKind }[]; cascadeDepth: number }
   | { type: 'spawn'; spawns: { cell: Cell; kind: TileKind }[]; cascadeDepth: number }
+  | { type: 'unlock'; cells: Cell[]; cascadeDepth: number }
   | { type: 'cascade'; depth: number; clearedThisStep: number }
   | { type: 'settle'; totalCleared: number; maxDepth: number };
 
@@ -42,6 +50,12 @@ export interface Board {
   readonly kinds: number;
   at(row: number, col: number): TileKind;
   snapshot(): TileKind[];
+  /** Row-major boolean layer parallel to `snapshot()`: true where a cell is locked. */
+  lockedSnapshot(): boolean[];
+  /** True iff the given cell is currently locked (false when out of bounds). */
+  isLocked(cell: Cell): boolean;
+  /** Number of currently-locked cells. */
+  lockedCount(): number;
   findMatches(): Cell[];
   swap(a: Cell, b: Cell): boolean;
   resolve(): BoardEvent[];
@@ -59,21 +73,39 @@ function indexOf(rows: number, cols: number, row: number, col: number): number {
  * Find every horizontal AND vertical run of length >=3 in a flat row-major
  * grid, returning the deduped set of matched flat indices (L/T overlaps are
  * naturally counted once because both scans write into the same Set).
+ *
+ * A locked cell (per the optional `locked` layer) can NEVER be part of a run:
+ * it is treated exactly like a hole (-1), breaking runs in both directions,
+ * even though it still holds a normal tile kind.
  */
-function matchedIndices(grid: readonly TileKind[], rows: number, cols: number): Set<number> {
+function matchedIndices(
+  grid: readonly TileKind[],
+  rows: number,
+  cols: number,
+  locked?: readonly boolean[],
+): Set<number> {
   const matched = new Set<number>();
+  const isBlocked = (i: number): boolean =>
+    grid[i] === undefined || grid[i] === -1 || (locked !== undefined && locked[i] === true);
 
   // Horizontal runs.
   for (let r = 0; r < rows; r++) {
     let c = 0;
     while (c < cols) {
-      const kind = grid[indexOf(rows, cols, r, c)];
-      if (kind === undefined || kind === -1) {
+      const i = indexOf(rows, cols, r, c);
+      if (isBlocked(i)) {
         c++;
         continue;
       }
+      const kind = grid[i];
       let end = c;
-      while (end + 1 < cols && grid[indexOf(rows, cols, r, end + 1)] === kind) end++;
+      while (
+        end + 1 < cols &&
+        !isBlocked(indexOf(rows, cols, r, end + 1)) &&
+        grid[indexOf(rows, cols, r, end + 1)] === kind
+      ) {
+        end++;
+      }
       if (end - c + 1 >= 3) {
         for (let cc = c; cc <= end; cc++) matched.add(indexOf(rows, cols, r, cc));
       }
@@ -85,13 +117,20 @@ function matchedIndices(grid: readonly TileKind[], rows: number, cols: number): 
   for (let c = 0; c < cols; c++) {
     let r = 0;
     while (r < rows) {
-      const kind = grid[indexOf(rows, cols, r, c)];
-      if (kind === undefined || kind === -1) {
+      const i = indexOf(rows, cols, r, c);
+      if (isBlocked(i)) {
         r++;
         continue;
       }
+      const kind = grid[i];
       let end = r;
-      while (end + 1 < rows && grid[indexOf(rows, cols, end + 1, c)] === kind) end++;
+      while (
+        end + 1 < rows &&
+        !isBlocked(indexOf(rows, cols, end + 1, c)) &&
+        grid[indexOf(rows, cols, end + 1, c)] === kind
+      ) {
+        end++;
+      }
       if (end - r + 1 >= 3) {
         for (let rr = r; rr <= end; rr++) matched.add(indexOf(rows, cols, rr, c));
       }
@@ -147,6 +186,8 @@ class BoardImpl implements Board {
   readonly cols: number;
   readonly kinds: number;
   private grid: TileKind[];
+  /** Parallel row-major boolean layer: true where a cell is locked (crated). */
+  private locked: boolean[];
   private readonly rng: Rng;
 
   constructor(config: BoardConfig) {
@@ -164,6 +205,32 @@ class BoardImpl implements Board {
     this.kinds = config.kinds;
     this.rng = config.rng;
     this.grid = createInitialGrid(this.rows, this.cols, this.kinds, this.rng);
+    this.locked = new Array(this.rows * this.cols).fill(false);
+    this.seedLocks(config.lockedCount ?? 0);
+  }
+
+  /**
+   * Mark `count` DISTINCT cells as locked, chosen deterministically from the
+   * injected rng (a partial Fisher-Yates over the flat index list, drawing one
+   * `rng.int` per lock). Runs AFTER grid seeding, so the rng draw sequence for
+   * the grid is unchanged when lockedCount is 0. Clamped to [0, rows*cols].
+   */
+  private seedLocks(requested: number): void {
+    const total = this.rows * this.cols;
+    let count = Number.isFinite(requested) ? Math.floor(requested) : 0;
+    if (count <= 0) return;
+    if (count > total) count = total;
+
+    // Partial Fisher-Yates: pick `count` distinct indices in [0, total).
+    const pool: number[] = new Array(total);
+    for (let i = 0; i < total; i++) pool[i] = i;
+    for (let k = 0; k < count; k++) {
+      const j = k + this.rng.int(total - k);
+      const tmp = pool[k]!;
+      pool[k] = pool[j]!;
+      pool[j] = tmp;
+      this.locked[pool[k]!] = true;
+    }
   }
 
   private idx(row: number, col: number): number {
@@ -188,8 +255,23 @@ class BoardImpl implements Board {
     return this.grid.slice();
   }
 
+  lockedSnapshot(): boolean[] {
+    return this.locked.slice();
+  }
+
+  isLocked(cell: Cell): boolean {
+    if (!this.inBounds(cell)) return false;
+    return this.locked[this.idx(cell.row, cell.col)] === true;
+  }
+
+  lockedCount(): number {
+    let n = 0;
+    for (const l of this.locked) if (l) n++;
+    return n;
+  }
+
   findMatches(): Cell[] {
-    const matched = matchedIndices(this.grid, this.rows, this.cols);
+    const matched = matchedIndices(this.grid, this.rows, this.cols, this.locked);
     return Array.from(matched)
       .map((i) => this.cellOf(i))
       .sort((a, b) => a.row - b.row || a.col - b.col);
@@ -201,12 +283,17 @@ class BoardImpl implements Board {
 
     const ia = this.idx(a.row, a.col);
     const ib = this.idx(b.row, b.col);
+
+    // A locked (crated) cell on either end cannot be swapped — same contract
+    // as any other illegal swap: reject, spend no move, change nothing.
+    if (this.locked[ia] === true || this.locked[ib] === true) return false;
+
     const va = this.grid[ia]!;
     const vb = this.grid[ib]!;
     this.grid[ia] = vb;
     this.grid[ib] = va;
 
-    if (matchedIndices(this.grid, this.rows, this.cols).size > 0) {
+    if (matchedIndices(this.grid, this.rows, this.cols, this.locked).size > 0) {
       return true;
     }
 
@@ -222,7 +309,7 @@ class BoardImpl implements Board {
     let totalCleared = 0;
 
     for (;;) {
-      const matched = matchedIndices(this.grid, this.rows, this.cols);
+      const matched = matchedIndices(this.grid, this.rows, this.cols, this.locked);
       if (matched.size === 0) break;
       depth++;
 
@@ -245,24 +332,58 @@ class BoardImpl implements Board {
         events.push({ type: 'clear', cells, kind, cascadeDepth: depth });
       }
 
-      // Clear matched cells.
+      // Freeing: unlock every locked cell that is 4-adjacent (up/down/left/
+      // right) to a cell cleared THIS step. Evaluated from this step's cleared
+      // set, before gravity. Emit an `unlock` event only when >=1 cell frees.
+      const freed = new Set<number>();
+      for (const i of matched) {
+        const cell = this.cellOf(i);
+        const neighbours: Cell[] = [
+          { row: cell.row - 1, col: cell.col },
+          { row: cell.row + 1, col: cell.col },
+          { row: cell.row, col: cell.col - 1 },
+          { row: cell.row, col: cell.col + 1 },
+        ];
+        for (const n of neighbours) {
+          if (!this.inBounds(n)) continue;
+          const ni = this.idx(n.row, n.col);
+          if (this.locked[ni] === true) freed.add(ni);
+        }
+      }
+      if (freed.size > 0) {
+        for (const ni of freed) this.locked[ni] = false;
+        const freedCells = Array.from(freed)
+          .map((i) => this.cellOf(i))
+          .sort((a, b) => a.row - b.row || a.col - b.col);
+        events.push({ type: 'unlock', cells: freedCells, cascadeDepth: depth });
+      }
+
+      // Clear matched cells (matched cells are never locked, so no lock lost).
       for (const i of matched) this.grid[i] = -1;
 
       // Gravity: compact each column's remaining tiles downward, preserving
-      // relative order (tiles never pass one another).
+      // relative order (tiles never pass one another). The locked flag travels
+      // WITH its tile as it falls.
       const moves: { from: Cell; to: Cell; kind: TileKind }[] = [];
       for (let c = 0; c < this.cols; c++) {
-        const nonEmpty: { row: number; kind: TileKind }[] = [];
+        const nonEmpty: { row: number; kind: TileKind; locked: boolean }[] = [];
         for (let r = 0; r < this.rows; r++) {
-          const v = this.grid[this.idx(r, c)]!;
-          if (v !== -1) nonEmpty.push({ row: r, kind: v });
+          const idx = this.idx(r, c);
+          const v = this.grid[idx]!;
+          if (v !== -1) nonEmpty.push({ row: r, kind: v, locked: this.locked[idx] === true });
         }
         const numEmpty = this.rows - nonEmpty.length;
-        for (let r = 0; r < this.rows; r++) this.grid[this.idx(r, c)] = -1;
+        for (let r = 0; r < this.rows; r++) {
+          const idx = this.idx(r, c);
+          this.grid[idx] = -1;
+          this.locked[idx] = false;
+        }
         for (let i = 0; i < nonEmpty.length; i++) {
           const entry = nonEmpty[i]!;
           const newRow = numEmpty + i;
-          this.grid[this.idx(newRow, c)] = entry.kind;
+          const nidx = this.idx(newRow, c);
+          this.grid[nidx] = entry.kind;
+          this.locked[nidx] = entry.locked;
           if (newRow !== entry.row) {
             moves.push({
               from: { row: entry.row, col: c },
@@ -283,6 +404,7 @@ class BoardImpl implements Board {
           if (this.grid[this.idx(r, c)] !== -1) break;
           const kind = this.rng.int(this.kinds);
           this.grid[this.idx(r, c)] = kind;
+          this.locked[this.idx(r, c)] = false; // spawned tiles are never locked
           spawns.push({ cell: { row: r, col: c }, kind });
         }
       }
@@ -299,15 +421,21 @@ class BoardImpl implements Board {
     return events;
   }
 
-  /** Would swapping `a` and `b` (without committing) produce a match? */
+  /**
+   * Would swapping `a` and `b` (without committing) produce a match? A swap
+   * involving a locked cell is never legal, so it never "would match" — this
+   * keeps hasMoves/findHint from ever proposing a locked-cell swap. The locked
+   * layer is passed through so locked tiles also can't form the resulting run.
+   */
   private wouldMatch(a: Cell, b: Cell): boolean {
-    const scratch = this.grid.slice();
     const ia = this.idx(a.row, a.col);
     const ib = this.idx(b.row, b.col);
+    if (this.locked[ia] === true || this.locked[ib] === true) return false;
+    const scratch = this.grid.slice();
     const tmp = scratch[ia]!;
     scratch[ia] = scratch[ib]!;
     scratch[ib] = tmp;
-    return matchedIndices(scratch, this.rows, this.cols).size > 0;
+    return matchedIndices(scratch, this.rows, this.cols, this.locked).size > 0;
   }
 
   findHint(): [Cell, Cell] | null {
@@ -342,7 +470,7 @@ class BoardImpl implements Board {
         this.grid[i] = this.grid[j]!;
         this.grid[j] = tmp;
       }
-      if (matchedIndices(this.grid, this.rows, this.cols).size === 0 && this.hasMoves()) {
+      if (matchedIndices(this.grid, this.rows, this.cols, this.locked).size === 0 && this.hasMoves()) {
         return true;
       }
     }

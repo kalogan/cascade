@@ -401,6 +401,12 @@ describe('fx2d / named presets', () => {
     expect(thin.count).toBeGreaterThan(0); // never silently vanishes at a small budget
   });
 
+  it('"clear" count override sets the base burst size', () => {
+    const sys = createParticleSystem({ cap: 64, rng: createRng(1) });
+    playFx(sys, "clear", 0, 0, { color, count: 20 });
+    expect(sys.count).toBe(20);
+  });
+
   it('countScale 0 drops a burst entirely', () => {
     const sys = createParticleSystem({ cap: 64, rng: createRng(1) });
     playFx(sys, 'clear', 0, 0, { color, countScale: 0 });

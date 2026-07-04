@@ -415,6 +415,12 @@ export function playFx(
      * Defaults to 1 (no scaling).
      */
     countScale?: number;
+    /**
+     * Override the base particle count for the `clear` burst (before countScale),
+     * so the game can bind it to a tunable (e.g. `particlesPerClear`). Ignored by
+     * the other presets. Defaults to the preset's built-in count.
+     */
+    count?: number;
   },
 ): void {
   const sizeFactor = opts.size ?? 1;
@@ -431,8 +437,9 @@ export function playFx(
   switch (name) {
     case 'clear': {
       // 8-16 outward shards with gravity, additive, tinted, fade+shrink ~400ms.
+      // Base count is overridable (game binds it to the `particlesPerClear` knob).
       sys.emit(x, y, {
-        count: scaleCount(12),
+        count: scaleCount(opts.count ?? 12),
         speed: [60, 160],
         angle: FULL_CIRCLE,
         gravity: 220,

@@ -27,7 +27,7 @@ import {
   type LevelConfig,
   type RunState,
 } from "game-kit/campaign";
-import { THEMES, type ThemeDef } from "game-kit/theme";
+import { THEMES, resolveTheme, type ThemeDef } from "game-kit/theme";
 import { createTuning, mountTuningPanel, MATCH3_TUNING, type Tuning } from "game-kit/tuning";
 import { createRng } from "game-kit/prng";
 import { createAudioManager, type AudioManager } from "game-kit/audio";
@@ -61,6 +61,8 @@ interface VTile {
   alpha: number;
   clearing: boolean;
   clearT: number;
+  /** "Locked" (crated) obstacle tile — unmatchable/unswappable until a neighbour clears. */
+  locked: boolean;
 }
 
 interface Scheduled {
@@ -153,10 +155,40 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   applyShine();
   tuning.subscribe(applyShine);
 
+  // ── per-world colour overrides (preview-harness "colour knobs") ───────────
+  // Deep-merged onto the authored THEME via resolveTheme, keyed by theme id, and
+  // persisted so a tuned palette survives reload. Empty by default → ships as
+  // authored. The harness edits these live; `bake` dumps them for THEMES.
+  // Nested-partial override (resolveTheme deep-merges; its param type is the
+  // conservative Partial<ThemeDef>, so we cast at the one call site).
+  type ThemeOverride = { palette?: Partial<ThemeDef["palette"]>; backdrop?: Partial<ThemeDef["backdrop"]> };
+  const THEME_OVR_KEY = "cascade-theme-overrides";
+  let themeOverrides: Record<string, ThemeOverride> = (() => {
+    try {
+      const raw = typeof localStorage !== "undefined" ? localStorage.getItem(THEME_OVR_KEY) : null;
+      return raw ? (JSON.parse(raw) as Record<string, ThemeOverride>) : {};
+    } catch {
+      return {};
+    }
+  })();
+  const persistThemeOverrides = () => {
+    try {
+      if (typeof localStorage !== "undefined") localStorage.setItem(THEME_OVR_KEY, JSON.stringify(themeOverrides));
+    } catch {
+      /* ignore */
+    }
+  };
+  const baseThemeFor = (worldIdx: number): ThemeDef => THEMES[Math.max(0, Math.min(THEMES.length - 1, worldIdx))]!;
+  const resolvedThemeFor = (worldIdx: number): ThemeDef => {
+    const base = baseThemeFor(worldIdx);
+    const ovr = themeOverrides[base.id];
+    return ovr ? resolveTheme(base, ovr as Partial<ThemeDef>) : base;
+  };
+
   // ── mutable game state ──────────────────────────────────────────────────
   let screen: PublicState["screen"] = "menu";
   let level: LevelConfig = difficultyForLevel(0);
-  let theme: ThemeDef = THEMES[0]!;
+  let theme: ThemeDef = resolvedThemeFor(0);
   let board: Board | null = null;
   let run: RunState = initRun(0);
   let rows = level.boardH;
@@ -218,12 +250,13 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     nextId = 1;
     if (!board) return;
     const snap = board.snapshot();
+    const locked = board.lockedSnapshot();
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const kind = snap[r * cols + c]!;
         if (kind < 0) continue;
         const id = nextId++;
-        vtiles.set(id, { id, kind, row: r, col: c, x: cx(c), y: cy(r), scale: 1, alpha: 1, clearing: false, clearT: 0 });
+        vtiles.set(id, { id, kind, row: r, col: c, x: cx(c), y: cy(r), scale: 1, alpha: 1, clearing: false, clearT: 0, locked: locked[r * cols + c] ?? false });
         idAt[r * cols + c] = id;
       }
     }
@@ -251,8 +284,16 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
   function startLevel(index: number) {
     index = Math.max(0, Math.min(N - 1, index));
     const outgoingTheme = theme;
-    level = difficultyForLevel(index);
-    theme = THEMES[Math.min(THEMES.length - 1, level.world - 1)]!;
+    // Difficulty curve params ride two live tunables (moveBudgetDecay,
+    // scoreTargetGrowth); defaults equal DEFAULT_DIFFICULTY so this is a no-op
+    // until the Director dials them.
+    const curveParams = {
+      ...DEFAULT_DIFFICULTY,
+      moveBudgetDecay: t("moveBudgetDecay"),
+      scoreTargetGrowth: t("scoreTargetGrowth"),
+    };
+    level = difficultyForLevel(index, curveParams);
+    theme = resolvedThemeFor(level.world - 1);
     // Only cross-fade when the scenery actually changes (a new world), not on
     // every level start within the same world.
     if (screen === "playing" && outgoingTheme !== theme) {
@@ -266,8 +307,13 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     rows = level.boardH;
     cols = level.boardW;
     const lrng = createRng(0x5eed + index * 2654435761);
-    board = createBoard({ rows, cols, kinds: level.tileKinds, rng: lrng });
-    run = runReducer(initRun(index), { type: "start", levelIndex: index });
+    // Campaign's per-world obstacleDensity → a count of "locked" (crated) tiles
+    // (World 1 = 0, so it stays a clean onboarding board; W2/W3 ramp up).
+    const lockedCount = Math.round(level.obstacleDensity * rows * cols);
+    board = createBoard({ rows, cols, kinds: level.tileKinds, rng: lrng, lockedCount });
+    // Same curve params flow into the run so scoreTarget/moveBudget match the
+    // level (the difficulty knobs actually move the target, not just the board).
+    run = runReducer(initRun(index, curveParams), { type: "start", levelIndex: index, params: curveParams });
     selected = null;
     dragStart = null;
     busy = false;
@@ -411,6 +457,11 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
           schedule(cursor + clearMs, () => applySpawn(spawns));
           break;
         }
+        case "unlock": {
+          const cells = ev.cells;
+          schedule(cursor, () => applyUnlock(cells));
+          break;
+        }
         case "cascade": {
           cursor += stepMs; // advance to the next cascade step
           break;
@@ -435,10 +486,15 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
           v.clearT = 0;
         }
       }
-      playFx(psys, "clear", cx(c.col), cy(c.row), { color, depth, countScale: particleScale });
+      playFx(psys, "clear", cx(c.col), cy(c.row), {
+        color,
+        depth,
+        countScale: particleScale,
+        count: t("particlesPerClear"),
+      });
     }
     // combo escalation: flourish + shake scale with cascade depth
-    if (depth >= 2 || cells.length >= 5) {
+    if (depth >= t("comboFlourishThreshold") || cells.length >= 5) {
       const c0 = cells[0]!;
       playFx(psys, "combo-flourish", cx(c0.col), cy(c0.row), { color, depth, countScale: particleScale });
     }
@@ -493,9 +549,22 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
         alpha: 1,
         clearing: false,
         clearT: 0,
+        locked: false, // refilled tiles are never crated
       });
       idAt[idx(s.cell)] = id;
     }
+  }
+
+  // A crate broke: clear the locked flag on those tiles + a small pop/chime.
+  function applyUnlock(cells: Cell[]) {
+    for (const c of cells) {
+      const id = idAt[idx(c)];
+      if (id < 0) continue;
+      const v = vtiles.get(id);
+      if (v) v.locked = false;
+      if (particleScale > 0) playFx(psys, "spawn-pop", cx(c.col), cy(c.row), { color: hexToRgb(theme.palette.glow) });
+    }
+    if (cells.length) audio.playTone(theme.audio.rootHz * 1.25, 0.06, { type: "triangle", gain: 0.14 });
   }
 
   function finalizeResolve() {
@@ -687,9 +756,27 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
       const fill = theme.palette.tiles[v.kind % theme.palette.tiles.length] ?? theme.palette.accent;
       renderer.drawTile(v.kind, v.x - size / 2, v.y - size / 2, size, {
         fill,
-        glow: theme.palette.glow,
+        glow: v.locked ? undefined : theme.palette.glow, // crated tiles don't glow
         alpha: v.alpha,
       });
+      if (v.locked) {
+        // "crate" overlay: dark tint + a light cage cross — reads as blocked,
+        // clears (with a pop) when a neighbour match frees it.
+        const half = size / 2;
+        renderer.drawRect(v.x - half, v.y - half, size, size, { fill: "#05060c", radius: 8, alpha: 0.5 });
+        ctx.save();
+        ctx.globalAlpha = v.alpha * 0.8;
+        ctx.strokeStyle = "rgba(222,228,238,0.7)";
+        ctx.lineWidth = Math.max(2, size * 0.08);
+        const s = half * 0.68;
+        ctx.beginPath();
+        ctx.moveTo(v.x - s, v.y - s);
+        ctx.lineTo(v.x + s, v.y + s);
+        ctx.moveTo(v.x + s, v.y - s);
+        ctx.lineTo(v.x - s, v.y + s);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
     ctx.restore();
 
@@ -766,6 +853,45 @@ export function createEngine(canvas: HTMLCanvasElement, hooks: EngineHooks) {
     /** The live tuning store (same instance the ?tune panel binds to) — the
      *  preview harness mounts its own always-on panel + "bake" against this. */
     tuning,
+    // ── per-world colour knobs (preview harness) ──────────────────────────
+    /** Current resolved colours for a world (0-based), for the harness pickers. */
+    getThemeColors(worldIdx: number) {
+      const th = resolvedThemeFor(worldIdx);
+      return {
+        id: th.id,
+        name: th.name,
+        bg: th.palette.bg,
+        surface: th.palette.surface,
+        glow: th.palette.glow,
+        tiles: th.palette.tiles.slice(),
+        sky: [th.backdrop.sky[0], th.backdrop.sky[1]] as [string, string],
+      };
+    },
+    /** Merge a colour patch into a world's override; re-resolves live if shown. */
+    setThemeColors(
+      worldIdx: number,
+      patch: { palette?: Partial<ThemeDef["palette"]>; backdrop?: { sky?: [string, string] } },
+    ) {
+      const base = baseThemeFor(worldIdx);
+      const cur = themeOverrides[base.id] ?? {};
+      themeOverrides[base.id] = {
+        ...cur,
+        palette: { ...(cur.palette ?? {}), ...(patch.palette ?? {}) },
+        backdrop: { ...(cur.backdrop ?? {}), ...(patch.backdrop ?? {}) },
+      };
+      persistThemeOverrides();
+      if (theme.id === base.id) theme = resolvedThemeFor(worldIdx);
+      emit();
+    },
+    /** Clear all colour overrides (back to authored palettes). */
+    resetThemeColors() {
+      themeOverrides = {};
+      persistThemeOverrides();
+      theme = resolvedThemeFor(level.world - 1);
+      emit();
+    },
+    /** Raw override map, for "bake" export. */
+    themeOverridesSnapshot: () => JSON.parse(JSON.stringify(themeOverrides)) as Record<string, ThemeOverride>,
     _debug: { get busy() { return busy; }, get board() { return board; } },
   };
 }

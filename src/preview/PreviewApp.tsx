@@ -16,6 +16,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type PublicState } from "../engine.js";
 import { useCascadeEngine } from "../useCascadeEngine.js";
+
+type WorldColors = {
+  id: string;
+  name: string;
+  bg: string;
+  surface: string;
+  glow: string;
+  tiles: string[];
+  sky: [string, string];
+};
 import { MATCH3_TUNING, type TunableSpec } from "game-kit/tuning";
 import { difficultyForLevel, totalLevels, DEFAULT_DIFFICULTY } from "game-kit/campaign";
 import { THEMES } from "game-kit/theme";
@@ -71,6 +81,20 @@ const btn: React.CSSProperties = {
   cursor: "pointer",
 };
 
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }} title={label}>
+      <span style={{ opacity: 0.65 }}>{label}</span>
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ width: 30, height: 22, padding: 0, border: "1px solid rgba(255,255,255,.2)", borderRadius: 4, background: "none" }}
+      />
+    </label>
+  );
+}
+
 export function PreviewApp() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [s, setS] = useState<PublicState>(INIT);
@@ -80,6 +104,8 @@ export function PreviewApp() {
   const [autoPlay, setAutoPlay] = useState(false);
   const [baked, setBaked] = useState<string | null>(null);
   const [vals, setVals] = useState<Record<string, number>>({});
+  const [colors, setColors] = useState<Record<number, WorldColors>>({});
+  const worldIdxs = useMemo(() => [...new Set(levels.map((l) => l.world - 1))], [levels]);
 
   // Mirror the engine's real tuning store into local state (runs after the
   // engine-mount effect, so engineRef.current is set); every knob edit round-trips
@@ -88,8 +114,11 @@ export function PreviewApp() {
     const eng = engineRef.current;
     if (!eng) return;
     setVals(eng.tuning.all());
+    const seed: Record<number, WorldColors> = {};
+    for (const wi of worldIdxs) seed[wi] = eng.getThemeColors(wi);
+    setColors(seed);
     return eng.tuning.subscribe(setVals);
-  }, [engineRef]);
+  }, [engineRef, worldIdxs]);
 
   // Auto-play: drive real hinted swaps so cascades/juice play while you tune.
   useEffect(() => {
@@ -104,9 +133,25 @@ export function PreviewApp() {
   }, [autoPlay, engineRef, s.levelIndex]);
 
   const setKnob = (key: string, v: number) => engineRef.current?.tuning.set(key, v);
+
+  // Apply a colour edit to a world: patch the engine's theme override (live) and
+  // mirror it into local state so the picker reflects it.
+  const patchColor = (wi: number, patch: Parameters<NonNullable<typeof engineRef.current>["setThemeColors"]>[1], local: Partial<WorldColors>) => {
+    engineRef.current?.setThemeColors(wi, patch);
+    setColors((prev) => ({ ...prev, [wi]: { ...prev[wi]!, ...local } }));
+  };
+  const resetColors = () => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    eng.resetThemeColors();
+    const seed: Record<number, WorldColors> = {};
+    for (const wi of worldIdxs) seed[wi] = eng.getThemeColors(wi);
+    setColors(seed);
+  };
+
   const bake = () => {
     const eng = engineRef.current;
-    if (eng) setBaked(JSON.stringify(eng.tuning.all(), null, 2));
+    if (eng) setBaked(JSON.stringify({ tunables: eng.tuning.all(), themeOverrides: eng.themeOverridesSnapshot() }, null, 2));
   };
   const worlds = [...new Set(levels.map((l) => l.world))];
 
@@ -195,6 +240,49 @@ export function PreviewApp() {
             })}
           </fieldset>
         ))}
+
+        {/* Per-world colour knobs (drive theme overrides live via resolveTheme) */}
+        <fieldset style={{ border: "1px solid rgba(255,255,255,.14)", borderRadius: 8, margin: "8px 0 0", padding: "4px 8px 8px" }}>
+          <legend style={{ opacity: 0.75, padding: "0 4px" }}>
+            Colours{" "}
+            <button style={{ ...btn, padding: "2px 8px", marginLeft: 6 }} onClick={resetColors}>
+              Reset colours
+            </button>
+          </legend>
+          {worldIdxs.map((wi) => {
+            const c = colors[wi];
+            if (!c) return null;
+            return (
+              <div key={wi} style={{ margin: "4px 0 6px" }}>
+                <div style={{ opacity: 0.6, margin: "2px 0" }}>{c.name}</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                  <ColorField label="bg" value={c.bg} onChange={(v) => patchColor(wi, { palette: { bg: v } }, { bg: v })} />
+                  <ColorField label="board" value={c.surface} onChange={(v) => patchColor(wi, { palette: { surface: v } }, { surface: v })} />
+                  <ColorField label="glow" value={c.glow} onChange={(v) => patchColor(wi, { palette: { glow: v } }, { glow: v })} />
+                  <ColorField label="sky↑" value={c.sky[0]} onChange={(v) => patchColor(wi, { backdrop: { sky: [v, c.sky[1]] } }, { sky: [v, c.sky[1]] })} />
+                  <ColorField label="sky↓" value={c.sky[1]} onChange={(v) => patchColor(wi, { backdrop: { sky: [c.sky[0], v] } }, { sky: [c.sky[0], v] })} />
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 4 }}>
+                  <span style={{ opacity: 0.6 }}>tiles</span>
+                  {c.tiles.map((tile, k) => (
+                    <input
+                      key={k}
+                      type="color"
+                      value={tile}
+                      title={`tile ${k}`}
+                      onChange={(e) => {
+                        const nt = c.tiles.slice();
+                        nt[k] = e.target.value;
+                        patchColor(wi, { palette: { tiles: nt } }, { tiles: nt });
+                      }}
+                      style={{ width: 26, height: 22, padding: 0, border: "1px solid rgba(255,255,255,.2)", borderRadius: 4, background: "none" }}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </fieldset>
 
         {baked && (
           <div style={{ marginTop: 8 }}>
